@@ -308,7 +308,7 @@ class BaseEnvironment(ABC):
         """
         return "/tmp"
 
-    def __init__(self, cwd: str, timeout: int, env: dict = None):
+    def __init__(self, cwd: str, timeout: int | None, env: dict = None):
         self.cwd = cwd
         self.timeout = timeout
         self.env = env or {}
@@ -329,7 +329,7 @@ class BaseEnvironment(ABC):
         cmd_string: str,
         *,
         login: bool = False,
-        timeout: int = 120,
+        timeout: int | float | None = 120,
         stdin_data: str | None = None,
     ) -> ProcessHandle:
         """Spawn a bash process to run *cmd_string*.
@@ -480,7 +480,7 @@ class BaseEnvironment(ABC):
     # Process lifecycle
     # ------------------------------------------------------------------
 
-    def _wait_for_process(self, proc: ProcessHandle, timeout: int = 120) -> dict:
+    def _wait_for_process(self, proc: ProcessHandle, timeout: int | float | None = 120) -> dict:
         """Poll-based wait with interrupt checking and stdout draining.
 
         Shared across all backends — not overridden.
@@ -624,7 +624,8 @@ class BaseEnvironment(ABC):
 
         drain_thread = threading.Thread(target=_drain, daemon=True)
         drain_thread.start()
-        deadline = time.monotonic() + timeout
+        timeout_value = None if timeout is None or timeout <= 0 else timeout
+        deadline = None if timeout_value is None else time.monotonic() + timeout_value
         _now = time.monotonic()
         _activity_state = {
             "last_touch": _now,
@@ -667,7 +668,7 @@ class BaseEnvironment(ABC):
                         "output": "".join(output_chunks) + "\n[Command interrupted]",
                         "returncode": 130,
                     }
-                if time.monotonic() > deadline:
+                if deadline is not None and time.monotonic() > deadline:
                     if _DEBUG_INTERRUPT:
                         logger.info(
                             "[interrupt-debug] _wait_for_process TIMEOUT "
@@ -677,7 +678,7 @@ class BaseEnvironment(ABC):
                     self._kill_process(proc)
                     drain_thread.join(timeout=2)
                     partial = "".join(output_chunks)
-                    timeout_msg = f"\n[Command timed out after {timeout}s]"
+                    timeout_msg = f"\n[Command timed out after {timeout_value}s]"
                     return {
                         "output": partial + timeout_msg
                         if partial
@@ -845,7 +846,9 @@ class BaseEnvironment(ABC):
         if rewrite_compound_background:
             from tools.terminal_tool import _rewrite_compound_background
             exec_command = _rewrite_compound_background(exec_command)
-        effective_timeout = timeout or self.timeout
+        effective_timeout = timeout if timeout is not None else self.timeout
+        if effective_timeout is not None and effective_timeout <= 0:
+            effective_timeout = None
         effective_cwd = cwd or self.cwd
 
         # Merge sudo stdin with caller stdin

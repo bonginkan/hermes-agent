@@ -129,8 +129,9 @@ _SUBAGENT_TOOLSETS = sorted(
 )
 _TOOLSET_LIST_STR = ", ".join(f"'{n}'" for n in _SUBAGENT_TOOLSETS)
 
-_DEFAULT_MAX_CONCURRENT_CHILDREN = 3
-MAX_DEPTH = 1  # flat by default: parent (0) -> child (1); grandchild rejected unless max_spawn_depth raised.
+_UNBOUNDED_DELEGATION_SENTINEL = 10**9
+_DEFAULT_MAX_CONCURRENT_CHILDREN = _UNBOUNDED_DELEGATION_SENTINEL
+MAX_DEPTH = _UNBOUNDED_DELEGATION_SENTINEL
 # Configurable depth cap consulted by _get_max_spawn_depth; MAX_DEPTH
 # stays as the default fallback and is still the symbol tests import.
 _MIN_SPAWN_DEPTH = 1
@@ -360,170 +361,30 @@ def _normalize_role(r: Optional[str]) -> str:
 
 
 def _get_max_concurrent_children() -> int:
-    """Read delegation.max_concurrent_children from config, falling back to
-    DELEGATION_MAX_CONCURRENT_CHILDREN env var, then the default (3).
-
-    Users can raise this as high as they want; only the floor (1) is enforced.
-
-    Uses the same ``_load_config()`` path that the rest of ``delegate_task``
-    uses, keeping config priority consistent (config.yaml > env > default).
-    """
-    cfg = _load_config()
-    val = cfg.get("max_concurrent_children")
-    if val is not None:
-        try:
-            result = max(1, int(val))
-            if result > 10:
-                logger.warning(
-                    "delegation.max_concurrent_children=%d: each child consumes API tokens "
-                    "independently. High values multiply cost linearly.",
-                    result,
-                )
-            return result
-        except (TypeError, ValueError):
-            logger.warning(
-                "delegation.max_concurrent_children=%r is not a valid integer; "
-                "using default %d",
-                val,
-                _DEFAULT_MAX_CONCURRENT_CHILDREN,
-            )
-            return _DEFAULT_MAX_CONCURRENT_CHILDREN
-    env_val = os.getenv("DELEGATION_MAX_CONCURRENT_CHILDREN")
-    if env_val:
-        try:
-            return max(1, int(env_val))
-        except (TypeError, ValueError):
-            return _DEFAULT_MAX_CONCURRENT_CHILDREN
-    return _DEFAULT_MAX_CONCURRENT_CHILDREN
+    """Return an effectively unbounded synchronous delegation fan-out cap."""
+    return _UNBOUNDED_DELEGATION_SENTINEL
 
 
-_DEFAULT_MAX_ASYNC_CHILDREN = 3
+_DEFAULT_MAX_ASYNC_CHILDREN = _UNBOUNDED_DELEGATION_SENTINEL
 
 
 def _get_max_async_children() -> int:
-    """Read delegation.max_async_children from config (floor 1, no ceiling).
-
-    Caps how many background (``background=true``) subagents can run at once.
-    When at capacity, a new async dispatch is REJECTED (not queued) so a
-    runaway model can't pile up unbounded background work. Separate from
-    max_concurrent_children, which bounds a single synchronous batch.
-    """
-    cfg = _load_config()
-    val = cfg.get("max_async_children")
-    if val is not None:
-        try:
-            return max(1, int(val))
-        except (TypeError, ValueError):
-            logger.warning(
-                "delegation.max_async_children=%r is not a valid integer; "
-                "using default %d",
-                val, _DEFAULT_MAX_ASYNC_CHILDREN,
-            )
-            return _DEFAULT_MAX_ASYNC_CHILDREN
-    env_val = os.getenv("DELEGATION_MAX_ASYNC_CHILDREN")
-    if env_val:
-        try:
-            return max(1, int(env_val))
-        except (TypeError, ValueError):
-            return _DEFAULT_MAX_ASYNC_CHILDREN
-    return _DEFAULT_MAX_ASYNC_CHILDREN
+    """Return an effectively unbounded background delegation capacity."""
+    return _UNBOUNDED_DELEGATION_SENTINEL
 
 
 def _get_child_timeout() -> Optional[float]:
-    """Read delegation.child_timeout_seconds from config.
-
-    Returns the number of seconds a single child agent is allowed to run
-    before being cut off, or ``None`` when no wall-clock cap applies.
-
-    Default: ``None`` (no timeout). Subagents doing legitimate heavy work
-    (deep code review, large research fan-outs, slow reasoning models) were
-    routinely killed mid-task by the old blanket cap even though they were
-    making steady progress. Failures should come from what the child is
-    actually doing — API errors, tool errors, iteration budget — not from a
-    generic delegation-level stopwatch. Stuck-child protection is handled
-    separately by the heartbeat staleness monitor, which stops refreshing
-    parent activity so the gateway inactivity timeout can fire.
-
-    Set ``delegation.child_timeout_seconds`` to a positive number to opt back
-    in to a hard cap (floor 30 s); ``0`` or a negative value means disabled.
-    """
-    cfg = _load_config()
-    val = cfg.get("child_timeout_seconds")
-    if val is not None:
-        try:
-            parsed = float(val)
-        except (TypeError, ValueError):
-            logger.warning(
-                "delegation.child_timeout_seconds=%r is not a valid number; "
-                "using default (no timeout)",
-                val,
-            )
-        else:
-            return None if parsed <= 0 else max(30.0, parsed)
-    env_val = os.getenv("DELEGATION_CHILD_TIMEOUT_SECONDS")
-    if env_val:
-        try:
-            parsed = float(env_val)
-        except (TypeError, ValueError):
-            pass
-        else:
-            return None if parsed <= 0 else max(30.0, parsed)
-    return DEFAULT_CHILD_TIMEOUT
+    """Subagents have no delegation-level wall-clock cap."""
+    return None
 
 
 def _get_max_spawn_depth() -> int:
-    """Read delegation.max_spawn_depth from config, floored at 1 (no ceiling).
-
-    depth 0 = parent agent.  max_spawn_depth = N means agents at depths
-    0..N-1 can spawn; depth N is the leaf floor.  Default 1 is flat:
-    parent spawns children (depth 1), depth-1 children cannot spawn
-    (blocked by this guard AND, for leaf children, by the delegation
-    toolset strip in _strip_blocked_tools).
-
-    Raise to 2+ to unlock nested orchestration. role="orchestrator"
-    removes the toolset strip for spawning children when
-    max_spawn_depth >= 2, enabling them to spawn their own workers.
-    Like max_concurrent_children, there is no upper ceiling — but each
-    extra level multiplies API cost, so raise it deliberately.
-    """
-    cfg = _load_config()
-    val = cfg.get("max_spawn_depth")
-    if val is None:
-        return MAX_DEPTH
-    try:
-        ival = int(val)
-    except (TypeError, ValueError):
-        logger.warning(
-            "delegation.max_spawn_depth=%r is not a valid integer; " "using default %d",
-            val,
-            MAX_DEPTH,
-        )
-        return MAX_DEPTH
-    floored = max(_MIN_SPAWN_DEPTH, ival)
-    if floored != ival:
-        logger.warning(
-            "delegation.max_spawn_depth=%d below floor %d; using %d",
-            ival,
-            _MIN_SPAWN_DEPTH,
-            floored,
-        )
-    return floored
+    """Return effectively unbounded nested delegation depth."""
+    return _UNBOUNDED_DELEGATION_SENTINEL
 
 
 def _get_orchestrator_enabled() -> bool:
-    """Global kill switch for the orchestrator role.
-
-    When False, role="orchestrator" is silently forced to "leaf" in
-    _build_child_agent and the delegation toolset is stripped as before.
-    Lets an operator disable the feature without a code revert.
-    """
-    cfg = _load_config()
-    val = cfg.get("orchestrator_enabled", True)
-    if isinstance(val, bool):
-        return val
-    # Accept "true"/"false" strings from YAML that doesn't auto-coerce.
-    if isinstance(val, str):
-        return val.strip().lower() in {"true", "1", "yes", "on"}
+    """Orchestrator delegation is always enabled."""
     return True
 
 
@@ -590,7 +451,7 @@ def _preserve_parent_mcp_toolsets(
     return preserved
 
 
-DEFAULT_MAX_ITERATIONS = 50
+DEFAULT_MAX_ITERATIONS = 0
 # No default wall-clock cap on child agents: legitimate heavy subagent work
 # (deep reviews, research fan-outs, slow reasoning models) was being killed
 # mid-task. Errors should come from what the child actually does; stuck-child

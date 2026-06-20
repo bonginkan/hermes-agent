@@ -10,8 +10,7 @@ that:
   * blocks the agent thread on an ``Event``,
   * resolves the wait when the gateway's button-callback or text-intercept
     fires ``resolve_gateway_clarify(clarify_id, response)``,
-  * supports timeouts so a user who never responds does NOT hang the agent
-    thread forever (which would also pin the gateway's running-agent guard).
+  * waits until the user answers, cancels the session, or sends an interrupt.
 
 State is module-level (same shape as ``tools.approval``) so platform
 adapters can call ``resolve_gateway_clarify`` without holding a back-
@@ -100,7 +99,7 @@ def register(
     return entry
 
 
-def wait_for_response(clarify_id: str, timeout: float) -> Optional[str]:
+def wait_for_response(clarify_id: str, timeout: Optional[float]) -> Optional[str]:
     """Block on the entry's event until resolved or timeout fires.
 
     Polls in 1-second slices so the agent's inactivity heartbeat keeps
@@ -108,7 +107,9 @@ def wait_for_response(clarify_id: str, timeout: float) -> Optional[str]:
     for 10 minutes with zero activity touches and the gateway's inactivity
     watchdog kills the agent while the user is still typing.
 
-    Returns the resolved response string, or ``None`` on timeout.
+    Returns the resolved response string, or ``None`` on timeout/session
+    cancellation.  ``None`` or non-positive timeout means no automatic
+    timeout; the wait still polls in one-second slices for activity heartbeats.
     """
     with _lock:
         entry = _entries.get(clarify_id)
@@ -120,13 +121,15 @@ def wait_for_response(clarify_id: str, timeout: float) -> Optional[str]:
     except Exception:  # pragma: no cover - optional
         touch_activity_if_due = None
 
-    deadline = time.monotonic() + max(timeout, 0.0)
+    timeout_value = None if timeout is None or timeout <= 0 else timeout
+    deadline = None if timeout_value is None else time.monotonic() + timeout_value
     activity_state = {"last_touch": time.monotonic(), "start": time.monotonic()}
     while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
+        remaining = None if deadline is None else deadline - time.monotonic()
+        if remaining is not None and remaining <= 0:
             break
-        if entry.event.wait(timeout=min(1.0, remaining)):
+        wait_slice = 1.0 if remaining is None else min(1.0, remaining)
+        if entry.event.wait(timeout=wait_slice):
             break
         if touch_activity_if_due is not None:
             touch_activity_if_due(activity_state, "waiting for user clarify response")
@@ -228,23 +231,9 @@ def clear_session(session_key: str) -> int:
 # Config
 # =========================================================================
 
-def get_clarify_timeout() -> int:
-    """Read the clarify response timeout (seconds) from config.
-
-    Defaults to 600 (10 minutes) — long enough for the user to type a
-    thoughtful response, short enough that an abandoned prompt eventually
-    unblocks the agent thread instead of pinning the running-agent guard
-    forever.
-
-    Reads ``agent.clarify_timeout`` from config.yaml.
-    """
-    try:
-        from hermes_cli.config import load_config
-        cfg = load_config() or {}
-        agent_cfg = cfg.get("agent", {}) or {}
-        return int(agent_cfg.get("clarify_timeout", 600))
-    except Exception:
-        return 600
+def get_clarify_timeout() -> Optional[int]:
+    """Gateway clarify waits until the user answers or explicitly cancels."""
+    return None
 
 
 # =========================================================================

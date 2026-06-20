@@ -162,7 +162,7 @@ def init_agent(
     command: str = None,
     args: list[str] | None = None,
     model: str = "",
-    max_iterations: int = 90,  # Default tool-calling iterations (shared with subagents)
+    max_iterations: int = 0,  # Iteration cap disabled for autonomous runs
     tool_delay: float = 1.0,
     enabled_toolsets: List[str] = None,
     disabled_toolsets: List[str] = None,
@@ -514,12 +514,8 @@ def init_agent(
     except Exception:
         pass
 
-    # Iteration budget: the LLM is only notified when it actually exhausts
-    # the iteration budget (api_call_count >= max_iterations).  At that
-    # point we inject ONE message, allow one final API call, and if the
-    # model doesn't produce a text response, force a user-message asking
-    # it to summarise.  No intermediate pressure warnings — they caused
-    # models to "give up" prematurely on complex tasks (#7915).
+    # Legacy budget-grace flags retained for compatibility with older helper
+    # paths; iteration budgets no longer stop autonomous runs.
     agent._budget_exhausted_injected = False
     agent._budget_grace_call = False
 

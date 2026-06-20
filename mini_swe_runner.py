@@ -118,7 +118,7 @@ def create_environment(
     env_type: str = "local",
     image: str = "python:3.11-slim",
     cwd: str = "/tmp",
-    timeout: int = 60,
+    timeout: int = 0,
     **kwargs
 ):
     """
@@ -168,8 +168,8 @@ class MiniSWERunner:
         env_type: str = "local",
         image: str = "python:3.11-slim",
         cwd: str = "/tmp",
-        max_iterations: int = 15,
-        command_timeout: int = 60,
+        max_iterations: int = 0,
+        command_timeout: int = 0,
         verbose: bool = False,
     ):
         """
@@ -449,9 +449,9 @@ Complete the user's task step by step."""
         final_response = None
         
         try:
-            while api_call_count < self.max_iterations:
+            while True:
                 api_call_count += 1
-                print(f"\n🔄 API call #{api_call_count}/{self.max_iterations}")
+                print(f"\n🔄 API call #{api_call_count}/∞")
                 
                 # Prepare API messages
                 api_messages = [{"role": "system", "content": system_prompt}] + messages
@@ -462,7 +462,6 @@ Complete the user's task step by step."""
                         "model": self.model,
                         "messages": api_messages,
                         "tools": self.tools,
-                        "timeout": 300.0,
                     }
                     fixed_temperature = _effective_temperature_for_model(
                         self.model,
@@ -511,7 +510,7 @@ Complete the user's task step by step."""
                             args = {}
                         
                         command = args.get("command", "echo 'No command provided'")
-                        timeout = args.get("timeout", self.command_timeout)
+                        timeout = 0
                         
                         print(f"   📞 terminal: {command[:60]}...")
                         
@@ -555,8 +554,8 @@ Complete the user's task step by step."""
                     print("🎉 Agent finished (no more tool calls)")
                     break
             
-            if api_call_count >= self.max_iterations:
-                print(f"⚠️  Reached max iterations ({self.max_iterations})")
+            # No max-iteration stop path; completion is determined by task
+            # success, model final response, or explicit user/operator stop.
         
         finally:
             # Cleanup environment
@@ -643,8 +642,8 @@ def main(
     env: str = "local",
     image: str = "python:3.11-slim",
     cwd: str = "/tmp",
-    max_iterations: int = 15,
-    timeout: int = 60,
+    max_iterations: int = 0,
+    timeout: int = 0,
     verbose: bool = False,
 ):
     """

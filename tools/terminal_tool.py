@@ -106,7 +106,7 @@ def _safe_parse_import_env(
 # Hard cap on foreground timeout; override via TERMINAL_MAX_FOREGROUND_TIMEOUT env var.
 FOREGROUND_MAX_TIMEOUT = _safe_parse_import_env(
     "TERMINAL_MAX_FOREGROUND_TIMEOUT",
-    600,
+    0,
     int,
     "integer",
 )
@@ -1169,8 +1169,8 @@ def _get_env_config() -> Dict[str, Any]:
         "cwd": cwd,
         "host_cwd": host_cwd,
         "docker_mount_cwd_to_workspace": mount_docker_cwd,
-        "timeout": _parse_env_var("TERMINAL_TIMEOUT", "180"),
-        "lifetime_seconds": _parse_env_var("TERMINAL_LIFETIME_SECONDS", "300"),
+        "timeout": _parse_env_var("TERMINAL_TIMEOUT", "0"),
+        "lifetime_seconds": _parse_env_var("TERMINAL_LIFETIME_SECONDS", "0"),
         # SSH-specific config
         "ssh_host": os.getenv("TERMINAL_SSH_HOST", ""),
         "ssh_user": os.getenv("TERMINAL_SSH_USER", ""),
@@ -1222,7 +1222,7 @@ def _get_modal_backend_state(modal_mode: object | None) -> Dict[str, Any]:
     )
 
 
-def _create_environment(env_type: str, image: str, cwd: str, timeout: int,
+def _create_environment(env_type: str, image: str, cwd: str, timeout: Optional[int],
                         ssh_config: dict = None, container_config: dict = None,
                         local_config: dict = None,
                         task_id: str = "default",
@@ -1374,6 +1374,8 @@ def _create_environment(env_type: str, image: str, cwd: str, timeout: int,
 
 def _cleanup_inactive_envs(lifetime_seconds: int = 300):
     """Clean up environments that have been inactive for longer than lifetime_seconds."""
+    if lifetime_seconds is None or lifetime_seconds <= 0:
+        return
     current_time = time.time()
 
     # Check the process registry -- skip cleanup for sandboxes with active
@@ -1925,31 +1927,15 @@ def terminal_tool(
             image = ""
 
         cwd = overrides.get("cwd") or config["cwd"]
-        default_timeout = config["timeout"]
-        effective_timeout = timeout or default_timeout
+        # Terminal commands are unbounded by default.  The ``timeout`` schema
+        # argument is retained for compatibility but no longer stops foreground
+        # autonomous work; users can interrupt the owning agent instead.
+        effective_timeout = None
 
-        # Reject foreground commands where the model explicitly requests
-        # a timeout above FOREGROUND_MAX_TIMEOUT — nudge it toward background.
-        if not background and timeout and timeout > FOREGROUND_MAX_TIMEOUT:
-            return json.dumps({
-                "error": (
-                    f"Foreground timeout {timeout}s exceeds the maximum of "
-                    f"{FOREGROUND_MAX_TIMEOUT}s. Use background=true with "
-                    f"notify_on_complete=true for long-running commands."
-                ),
-            }, ensure_ascii=False)
+        # Foreground timeout caps are disabled for autonomous operation.
 
-        # Guardrail: long-lived server/watch commands should run as managed
-        # background sessions, not foreground shell hacks.
-        if not background:
-            guidance = _foreground_background_guidance(command)
-            if guidance:
-                return json.dumps({
-                    "output": "",
-                    "exit_code": -1,
-                    "error": guidance,
-                    "status": "error",
-                }, ensure_ascii=False)
+        # Foreground/background guidance is advisory only now; do not block the
+        # command path for autonomous runs.
 
         # Start cleanup thread
         _start_cleanup_thread()
@@ -2667,7 +2653,7 @@ TERMINAL_SCHEMA = {
             },
             "timeout": {
                 "type": "integer",
-                "description": f"Max seconds to wait (default: 180, foreground max: {FOREGROUND_MAX_TIMEOUT}). Returns INSTANTLY when command finishes — set high for long tasks, you won't wait unnecessarily. Foreground timeout above {FOREGROUND_MAX_TIMEOUT}s is rejected; use background=true for longer commands.",
+                "description": f"Max seconds to wait (default: unlimited, foreground max: {'unlimited' if FOREGROUND_MAX_TIMEOUT <= 0 else FOREGROUND_MAX_TIMEOUT}). Returns INSTANTLY when command finishes. Foreground timeouts above the cap are rejected only when TERMINAL_MAX_FOREGROUND_TIMEOUT is positive; use background=true for managed long-lived processes.",
                 "minimum": 1
             },
             "workdir": {

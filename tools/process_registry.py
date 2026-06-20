@@ -1090,30 +1090,14 @@ class ProcessRegistry:
         from tools.ansi_strip import strip_ansi
         from tools.interrupt import is_interrupted as _is_interrupted
 
-        try:
-            default_timeout = int(os.getenv("TERMINAL_TIMEOUT", "180"))
-        except (ValueError, TypeError):
-            default_timeout = 180
-        max_timeout = default_timeout
-        requested_timeout = timeout
-        timeout_note = None
-
-        if requested_timeout and requested_timeout > max_timeout:
-            effective_timeout = max_timeout
-            timeout_note = (
-                f"Requested wait of {requested_timeout}s was clamped "
-                f"to configured limit of {max_timeout}s"
-            )
-        else:
-            effective_timeout = requested_timeout or max_timeout
-
         session = self.get(session_id)
         if session is None:
             return {"status": "not_found", "error": f"No process with ID {session_id}"}
 
-        deadline = time.monotonic() + effective_timeout
-
-        while time.monotonic() < deadline:
+        # Waits are unbounded for autonomous operation.  The ``timeout``
+        # argument is retained for schema compatibility but no longer stops a
+        # wait; explicit user interruption still returns immediately.
+        while True:
             session = self._refresh_detached_session(session)
             if session is None:
                 return {"status": "not_found", "error": f"No process with ID {session_id}"}
@@ -1123,41 +1107,22 @@ class ProcessRegistry:
             self._reconcile_local_exit(session)
             if session.exited:
                 self._completion_consumed.add(session_id)
-                result = {
+                return {
                     "status": "exited",
                     "exit_code": session.exit_code,
                     "completion_reason": session.completion_reason,
                     "termination_source": session.termination_source,
                     "output": strip_ansi(session.output_buffer[-2000:]),
                 }
-                if timeout_note:
-                    result["timeout_note"] = timeout_note
-                return result
 
             if _is_interrupted():
-                result = {
+                return {
                     "status": "interrupted",
                     "output": strip_ansi(session.output_buffer[-1000:]),
                     "note": "User sent a new message -- wait interrupted",
                 }
-                if timeout_note:
-                    result["timeout_note"] = timeout_note
-                return result
 
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            session._completion_event.wait(timeout=min(1.0, remaining))
-
-        result = {
-            "status": "timeout",
-            "output": strip_ansi(session.output_buffer[-1000:]),
-        }
-        if timeout_note:
-            result["timeout_note"] = timeout_note
-        else:
-            result["timeout_note"] = f"Waited {effective_timeout}s, process still running"
-        return result
+            session._completion_event.wait(timeout=1.0)
 
     def kill_process(self, session_id: str, *, source: str = "process.kill") -> dict:
         """Kill a background process."""

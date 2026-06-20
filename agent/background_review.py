@@ -549,8 +549,8 @@ def _run_review_in_thread(
             review_agent._skill_nudge_interval = 0
             # Suppress all status/warning emits from the fork so the
             # user only sees the final successful-action summary.
-            # Without this, mid-review "Iteration budget exhausted",
-            # rate-limit retries, compression warnings, and other
+            # Without this, mid-review lifecycle messages such as rate-limit
+            # retries, compression warnings, and other
             # lifecycle messages bubble up through _emit_status ->
             # _vprint and leak past the stdout redirect (they go via
             # _print_fn/status_callback, which bypass sys.stdout).

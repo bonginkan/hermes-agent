@@ -275,14 +275,14 @@ def _process_single_prompt(
             try:
                 probe = _sp.run(
                     ["docker", "image", "inspect", container_image],
-                    capture_output=True, timeout=10,
+                    capture_output=True,
                 )
                 if probe.returncode != 0:
                     if config.get("verbose"):
                         print(f"   Prompt {prompt_index}: Pulling docker image {container_image}...", flush=True)
                     pull = _sp.run(
                         ["docker", "pull", container_image],
-                        capture_output=True, text=True, timeout=600,
+                        capture_output=True, text=True,
                     )
                     if pull.returncode != 0:
                         return {
@@ -535,7 +535,7 @@ class BatchRunner:
         batch_size: int,
         run_name: str,
         distribution: str = "default",
-        max_iterations: int = 10,
+        max_iterations: int = 0,
         base_url: str = None,
         api_key: str = None,
         model: str = "claude-opus-4-20250514",

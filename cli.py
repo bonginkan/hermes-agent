@@ -405,7 +405,7 @@ def load_cli_config() -> Dict[str, Any]:
             "docker_mount_cwd_to_workspace": False,  # explicit opt-in only; default off for sandbox isolation
         },
         "browser": {
-            "inactivity_timeout": 120,  # Auto-cleanup inactive browser sessions after 2 min
+            "inactivity_timeout": 0,  # Browser session auto-cleanup disabled
             "record_sessions": False,  # Auto-record browser sessions as WebM videos
             "engine": "auto",  # Browser engine: auto (Chrome), lightpanda, chrome
             "camofox": {
@@ -418,7 +418,7 @@ def load_cli_config() -> Dict[str, Any]:
             "threshold": 0.50,    # Compress at 50% of model's context limit
         },
         "agent": {
-            "max_turns": 90,  # Default max tool-calling iterations (shared with subagents)
+            "max_turns": 0,  # Iteration cap disabled for autonomous runs
             "verbose": False,
             "system_prompt": "",
             "prefill_messages_file": "",
@@ -484,7 +484,7 @@ def load_cli_config() -> Dict[str, Any]:
             },
         },
         "delegation": {
-            "max_iterations": 45,  # Max tool-calling turns per child agent
+            "max_iterations": 0,  # Child-agent iteration cap disabled
             "model": "",       # Subagent model override (empty = inherit parent model)
             "provider": "",    # Subagent provider override (empty = inherit parent provider)
             "base_url": "",    # Direct OpenAI-compatible endpoint for subagents
@@ -601,6 +601,7 @@ def load_cli_config() -> Dict[str, Any]:
         "env_type": "TERMINAL_ENV",
         "cwd": "TERMINAL_CWD",
         "timeout": "TERMINAL_TIMEOUT",
+        "max_foreground_timeout": "TERMINAL_MAX_FOREGROUND_TIMEOUT",
         "home_mode": "TERMINAL_HOME_MODE",
         "lifetime_seconds": "TERMINAL_LIFETIME_SECONDS",
         "docker_image": "TERMINAL_DOCKER_IMAGE",
@@ -3435,17 +3436,20 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin):
         # Max turns priority: CLI arg > config file > env var > default
         if max_turns is not None:  # CLI arg was explicitly set
             self.max_turns = max_turns
-        elif CLI_CONFIG["agent"].get("max_turns"):
+        elif (
+            "max_turns" in CLI_CONFIG.get("agent", {})
+            and CLI_CONFIG["agent"].get("max_turns") is not None
+        ):
             self.max_turns = CLI_CONFIG["agent"]["max_turns"]
-        elif CLI_CONFIG.get("max_turns"):  # Backwards compat: root-level max_turns
+        elif "max_turns" in CLI_CONFIG and CLI_CONFIG.get("max_turns") is not None:  # Backwards compat: root-level max_turns
             self.max_turns = CLI_CONFIG["max_turns"]
         elif os.getenv("HERMES_MAX_ITERATIONS"):
             try:
                 self.max_turns = int(os.getenv("HERMES_MAX_ITERATIONS", ""))
             except (TypeError, ValueError):
-                self.max_turns = 90
+                self.max_turns = 0
         else:
-            self.max_turns = 90
+            self.max_turns = 0
         
         # Parse and validate toolsets
         self.enabled_toolsets = toolsets
@@ -8075,9 +8079,9 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin):
         try:
             cfg = load_config() or {}
             goals_cfg = cfg.get("goals") or {}
-            max_turns = int(goals_cfg.get("max_turns", 20) or 20)
+            max_turns = int(goals_cfg.get("max_turns", 0) or 0)
         except Exception:
-            max_turns = 20
+            max_turns = 0
 
         mgr = GoalManager(session_id=sid, default_max_turns=max_turns)
         self._goal_manager = mgr
@@ -11422,16 +11426,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin):
                 sys.stdout.write("\a")
                 sys.stdout.flush()
 
-            # Notify when iteration budget was hit
-            if result and not result.get("completed") and not result.get("interrupted"):
-                _api_calls = result.get("api_calls", 0)
-                if _api_calls >= getattr(self.agent, "max_iterations", 90):
-                    _max_iter = getattr(self.agent, "max_iterations", 90)
-                    _cprint(
-                        f"\n{_DIM}⚠ Iteration budget reached "
-                        f"({_api_calls}/{_max_iter}) — "
-                        f"response may be incomplete{_RST}"
-                    )
+            # Iteration enforcement is disabled; do not warn on legacy counters.
 
             # Speak response aloud if voice TTS is enabled
             # Skip batch TTS when streaming TTS already handled it

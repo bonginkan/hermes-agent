@@ -184,8 +184,9 @@ _last_screenshot_cleanup_by_dir: dict[str, float] = {}
 # Configuration
 # ============================================================================
 
-# Default timeout for browser commands (seconds)
-DEFAULT_COMMAND_TIMEOUT = 30
+# Default browser command timeout. ``None`` means no automatic command
+# timeout; user interrupts still kill the owning agent turn.
+DEFAULT_COMMAND_TIMEOUT: Optional[int] = None
 
 # Max tokens for snapshot content before summarization
 SNAPSHOT_SUMMARIZE_THRESHOLD = 8000
@@ -197,11 +198,11 @@ _cached_command_timeout: Optional[int] = None
 _command_timeout_resolved = False
 
 
-def _get_command_timeout() -> int:
+def _get_command_timeout() -> Optional[int]:
     """Return the configured browser command timeout from config.yaml.
 
-    Reads ``config["browser"]["command_timeout"]`` and falls back to
-    ``DEFAULT_COMMAND_TIMEOUT`` (30s) if unset or unreadable.  Result is
+    Reads optional ``config["browser"]["command_timeout"]``. When unset,
+    commands wait indefinitely unless the user interrupts the agent. Result is
     cached after the first call and cleared by ``cleanup_all_browsers()``.
     """
     global _cached_command_timeout, _command_timeout_resolved
@@ -209,15 +210,7 @@ def _get_command_timeout() -> int:
         return _cached_command_timeout  # type: ignore[return-value]
 
     _command_timeout_resolved = True
-    result = DEFAULT_COMMAND_TIMEOUT
-    try:
-        from hermes_cli.config import read_raw_config
-        cfg = read_raw_config()
-        val = cfg_get(cfg, "browser", "command_timeout")
-        if val is not None:
-            result = max(int(val), 5)  # Floor at 5s to avoid instant kills
-    except Exception as e:
-        logger.debug("Could not read command_timeout from config: %s", e)
+    result = None
     _cached_command_timeout = result
     return result
 
@@ -798,7 +791,7 @@ def _run_chrome_fallback_command(
     task_id: str,
     command: str,
     args: List[str],
-    timeout: int,
+    timeout: Optional[int],
 ) -> Dict[str, Any]:
     """Run a browser command in a temporary Chrome session at the current URL.
 
@@ -809,6 +802,8 @@ def _run_chrome_fallback_command(
     down.
     """
     import uuid
+
+    timeout = None
 
     # 1. Grab the current URL from the Lightpanda session. Use
     # ``_engine_override=\"auto\"`` so this helper does not recursively trigger
@@ -862,7 +857,7 @@ def _run_chrome_fallback_command(
     browser_env = {**os.environ, "AGENT_BROWSER_SOCKET_DIR": task_socket_dir}
     browser_env["PATH"] = _merge_browser_path(browser_env.get("PATH", ""))
 
-    if "AGENT_BROWSER_IDLE_TIMEOUT_MS" not in browser_env:
+    if "AGENT_BROWSER_IDLE_TIMEOUT_MS" not in browser_env and BROWSER_SESSION_INACTIVITY_TIMEOUT > 0:
         browser_env["AGENT_BROWSER_IDLE_TIMEOUT_MS"] = str(BROWSER_SESSION_INACTIVITY_TIMEOUT * 1000)
 
     def _run_tmp(cmd: str, cmd_args: List[str]) -> Dict[str, Any]:
@@ -962,7 +957,7 @@ def _run_chrome_fallback_command(
 def _chrome_fallback_screenshot(
     task_id: str,
     args: List[str],
-    timeout: int,
+    timeout: Optional[int],
 ) -> Dict[str, Any]:
     """Take a screenshot using a temporary Chrome session."""
     return _run_chrome_fallback_command(task_id, "screenshot", args, timeout)
@@ -1180,22 +1175,11 @@ _cleanup_done = False
 # Session inactivity timeout (seconds) - cleanup if no activity for this long.
 # config.yaml is authoritative; BROWSER_INACTIVITY_TIMEOUT remains a legacy
 # fallback so old deployments keep working if they have not migrated yet.
-DEFAULT_SESSION_INACTIVITY_TIMEOUT = int(
-    DEFAULT_CONFIG.get("browser", {}).get("inactivity_timeout", 120)
-)
+DEFAULT_SESSION_INACTIVITY_TIMEOUT = 0
 
 
 def _get_session_inactivity_timeout() -> int:
-    result = env_int("BROWSER_INACTIVITY_TIMEOUT", DEFAULT_SESSION_INACTIVITY_TIMEOUT)
-    try:
-        from hermes_cli.config import read_raw_config
-        cfg = read_raw_config()
-        val = cfg_get(cfg, "browser", "inactivity_timeout")
-        if val is not None:
-            result = max(int(val), 30)  # Floor at 30s to avoid instant reaping
-    except Exception as e:
-        logger.debug("Could not read inactivity_timeout from config: %s", e)
-    return result
+    return 0
 
 
 BROWSER_SESSION_INACTIVITY_TIMEOUT = _get_session_inactivity_timeout()
@@ -1270,6 +1254,9 @@ def _cleanup_inactive_browser_sessions():
     automatically close sessions that haven't been used recently, preventing
     orphaned sessions (local or Browserbase) from accumulating.
     """
+    if BROWSER_SESSION_INACTIVITY_TIMEOUT <= 0:
+        return
+
     current_time = time.time()
     sessions_to_cleanup = []
 
@@ -1915,8 +1902,7 @@ def _run_browser_command(
     Returns:
         Parsed JSON response from agent-browser
     """
-    if timeout is None:
-        timeout = _get_command_timeout()
+    timeout = None
     args = args or []
 
     # Build the command
@@ -2023,7 +2009,10 @@ def _run_browser_command(
         # counterpart to our Python-side _cleanup_inactive_browser_sessions
         # — the daemon kills itself and its Chrome children when no CLI
         # commands arrive within the window.  Added in agent-browser 0.24.
-        if "AGENT_BROWSER_IDLE_TIMEOUT_MS" not in browser_env:
+        if (
+            "AGENT_BROWSER_IDLE_TIMEOUT_MS" not in browser_env
+            and BROWSER_SESSION_INACTIVITY_TIMEOUT > 0
+        ):
             idle_ms = str(BROWSER_SESSION_INACTIVITY_TIMEOUT * 1000)
             browser_env["AGENT_BROWSER_IDLE_TIMEOUT_MS"] = idle_ms
 
@@ -2407,7 +2396,13 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
         session_info["_first_nav"] = False
         _maybe_start_recording(nav_session_key)
 
-    result = _run_browser_command(nav_session_key, "open", [url], timeout=max(_get_command_timeout(), 60))
+    _nav_timeout = _get_command_timeout()
+    result = _run_browser_command(
+        nav_session_key,
+        "open",
+        [url],
+        timeout=None if _nav_timeout is None else max(_nav_timeout, 60),
+    )
 
     # Remember which session served this nav so snapshot/click/fill/...
     # on the same task_id hit it (critical when hybrid routing has both a

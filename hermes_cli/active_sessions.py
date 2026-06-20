@@ -54,20 +54,8 @@ def coerce_max_concurrent_sessions(value: Any, key: str = "max_concurrent_sessio
 
 
 def resolve_max_concurrent_sessions(config: Any) -> Optional[int]:
-    """Resolve top-level max_concurrent_sessions with gateway.* fallback."""
-    raw: Any = None
-    key = "max_concurrent_sessions"
-    if isinstance(config, dict):
-        if "max_concurrent_sessions" in config:
-            raw = config.get("max_concurrent_sessions")
-        else:
-            gateway_cfg = config.get("gateway")
-            if isinstance(gateway_cfg, dict):
-                raw = gateway_cfg.get("max_concurrent_sessions")
-                key = "gateway.max_concurrent_sessions"
-    else:
-        raw = getattr(config, "max_concurrent_sessions", None)
-    return coerce_max_concurrent_sessions(raw, key=key)
+    """Gateway active-session caps are disabled."""
+    return None
 
 
 def active_session_limit_message(active_count: int, max_sessions: int) -> str:

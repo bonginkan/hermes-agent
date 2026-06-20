@@ -919,42 +919,14 @@ def _deliver_result(job: dict, content: str, adapters=None, loop=None) -> Option
     return None
 
 
-_DEFAULT_SCRIPT_TIMEOUT = 120  # seconds
-# Backward-compatible module override used by tests and emergency monkeypatches.
+_DEFAULT_SCRIPT_TIMEOUT = None
+# Backward-compatible module override retained for tests; ignored in autonomous mode.
 _SCRIPT_TIMEOUT = _DEFAULT_SCRIPT_TIMEOUT
 
 
-def _get_script_timeout() -> int:
-    """Resolve cron pre-run script timeout from module/env/config with a safe default."""
-    if _SCRIPT_TIMEOUT != _DEFAULT_SCRIPT_TIMEOUT:
-        try:
-            timeout = int(float(_SCRIPT_TIMEOUT))
-            if timeout > 0:
-                return timeout
-        except Exception:
-            logger.warning("Invalid patched _SCRIPT_TIMEOUT=%r; using env/config/default", _SCRIPT_TIMEOUT)
-
-    env_value = os.getenv("HERMES_CRON_SCRIPT_TIMEOUT", "").strip()
-    if env_value:
-        try:
-            timeout = int(float(env_value))
-            if timeout > 0:
-                return timeout
-        except Exception:
-            logger.warning("Invalid HERMES_CRON_SCRIPT_TIMEOUT=%r; using config/default", env_value)
-
-    try:
-        cfg = load_config() or {}
-        cron_cfg = cfg.get("cron", {}) if isinstance(cfg, dict) else {}
-        configured = cron_cfg.get("script_timeout_seconds")
-        if configured is not None:
-            timeout = int(float(configured))
-            if timeout > 0:
-                return timeout
-    except Exception as exc:
-        logger.debug("Failed to load cron script timeout from config: %s", exc)
-
-    return _DEFAULT_SCRIPT_TIMEOUT
+def _get_script_timeout() -> Optional[int]:
+    """Cron pre-run scripts are unbounded; user/operator stop ends them."""
+    return None
 
 
 def _run_job_script(script_path: str) -> tuple[bool, str]:
@@ -1719,8 +1691,15 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
                     logger.warning("Job '%s': failed to parse prefill messages file '%s': %s", job_id, pfpath, e)
                     prefill_messages = None
 
-        # Max iterations
-        max_iterations = _cfg.get("agent", {}).get("max_turns") or _cfg.get("max_turns") or 90
+        # Max iterations.  Preserve explicit 0/negative values: Hermes treats
+        # them as unlimited, so ``or 90`` would silently re-enable a cap.
+        _agent_cfg = _cfg.get("agent", {}) if isinstance(_cfg.get("agent"), dict) else {}
+        if "max_turns" in _agent_cfg and _agent_cfg.get("max_turns") is not None:
+            max_iterations = int(_agent_cfg.get("max_turns"))
+        elif "max_turns" in _cfg and _cfg.get("max_turns") is not None:
+            max_iterations = int(_cfg.get("max_turns"))
+        else:
+            max_iterations = 0
 
         # Provider routing
         pr = _cfg.get("provider_routing", {})
@@ -1840,93 +1819,20 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
             session_db=_session_db,
         )
         
-        # Run the agent with an *inactivity*-based timeout: the job can run
-        # for hours if it's actively calling tools / receiving stream tokens,
-        # but a hung API call or stuck tool with no activity for the configured
-        # duration is caught and killed.  Default 600s (10 min inactivity);
-        # override via HERMES_CRON_TIMEOUT env var.  0 = unlimited.
-        #
-        # Uses the agent's built-in activity tracker (updated by
-        # _touch_activity() on every tool call, API call, and stream delta).
-        _raw_cron_timeout = os.getenv("HERMES_CRON_TIMEOUT", "").strip()
-        if _raw_cron_timeout:
-            try:
-                _cron_timeout = float(_raw_cron_timeout)
-            except (ValueError, TypeError):
-                logger.warning(
-                    "Invalid HERMES_CRON_TIMEOUT=%r; using default 600s",
-                    _raw_cron_timeout,
-                )
-                _cron_timeout = 600.0
-        else:
-            _cron_timeout = 600.0
-        _cron_inactivity_limit = _cron_timeout if _cron_timeout > 0 else None
-        _POLL_INTERVAL = 5.0
+        # Run the agent without an automatic cron inactivity cap.  User or
+        # operator interrupts remain the only stop mechanism.
         _cron_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         # Preserve scheduler-scoped ContextVar state (for example skill-declared
-        # env passthrough registrations) when the cron run hops into the worker
-        # thread used for inactivity timeout monitoring.
+        # env passthrough registrations) when the cron run hops into the worker.
         _cron_context = contextvars.copy_context()
         _cron_future = _cron_pool.submit(_cron_context.run, agent.run_conversation, prompt)
-        _inactivity_timeout = False
         try:
-            if _cron_inactivity_limit is None:
-                # Unlimited — just wait for the result.
-                result = _cron_future.result()
-            else:
-                result = None
-                while True:
-                    done, _ = concurrent.futures.wait(
-                        {_cron_future}, timeout=_POLL_INTERVAL,
-                    )
-                    if done:
-                        result = _cron_future.result()
-                        break
-                    # Agent still running — check inactivity.
-                    _idle_secs = 0.0
-                    if hasattr(agent, "get_activity_summary"):
-                        try:
-                            _act = agent.get_activity_summary()
-                            _idle_secs = _act.get("seconds_since_activity", 0.0)
-                        except Exception:
-                            pass
-                    if _idle_secs >= _cron_inactivity_limit:
-                        _inactivity_timeout = True
-                        break
+            result = _cron_future.result()
         except Exception:
             _cron_pool.shutdown(wait=False, cancel_futures=True)
             raise
         finally:
             _cron_pool.shutdown(wait=False, cancel_futures=True)
-
-        if _inactivity_timeout:
-            # Build diagnostic summary from the agent's activity tracker.
-            _activity = {}
-            if hasattr(agent, "get_activity_summary"):
-                try:
-                    _activity = agent.get_activity_summary()
-                except Exception:
-                    pass
-            _last_desc = _activity.get("last_activity_desc", "unknown")
-            _secs_ago = _activity.get("seconds_since_activity", 0)
-            _cur_tool = _activity.get("current_tool")
-            _iter_n = _activity.get("api_call_count", 0)
-            _iter_max = _activity.get("max_iterations", 0)
-
-            logger.error(
-                "Job '%s' idle for %.0fs (inactivity limit %.0fs) "
-                "| last_activity=%s | iteration=%s/%s | tool=%s",
-                job_name, _secs_ago, _cron_inactivity_limit,
-                _last_desc, _iter_n, _iter_max,
-                _cur_tool or "none",
-            )
-            if hasattr(agent, "interrupt"):
-                agent.interrupt("Cron job timed out (inactivity)")
-            raise TimeoutError(
-                f"Cron job '{job_name}' idle for "
-                f"{int(_secs_ago)}s (limit {int(_cron_inactivity_limit)}s) "
-                f"— last activity: {_last_desc}"
-            )
 
         # Guard against non-dict returns from run_conversation under error conditions
         if not isinstance(result, dict):

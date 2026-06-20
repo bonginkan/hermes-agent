@@ -560,7 +560,14 @@ def run_conversation(
             should_review_memory=_should_review_memory,
         )
 
-    while (api_call_count < agent.max_iterations and agent.iteration_budget.remaining > 0) or agent._budget_grace_call:
+    # Autonomous operation is intentionally unbounded.  ``max_iterations`` is
+    # retained as legacy/config metadata for callers that still display it, but
+    # the live conversation loop no longer treats it as a stop condition.  The
+    # user interrupt path below remains the authoritative way to stop a run.
+    _iterations_unlimited = True
+    _max_iterations_label = "∞"
+
+    while True:
         # Reset per-turn checkpoint dedup so each iteration can take one snapshot
         agent._checkpoint_mgr.new_turn()
 
@@ -581,11 +588,14 @@ def run_conversation(
         # this iteration regardless of outcome.
         if agent._budget_grace_call:
             agent._budget_grace_call = False
-        elif not agent.iteration_budget.consume():
-            _turn_exit_reason = "budget_exhausted"
-            if not agent.quiet_mode:
-                agent._safe_print(f"\n⚠️  Iteration budget exhausted ({agent.iteration_budget.used}/{agent.iteration_budget.max_total} iterations used)")
-            break
+        else:
+            # Keep activity/accounting counters moving for status displays, but
+            # deliberately ignore the boolean result.  Exhausting a historical
+            # IterationBudget must never stop autonomous work.
+            try:
+                agent.iteration_budget.consume()
+            except Exception:
+                pass
 
         # Fire step_callback for gateway hooks (agent:step event)
         if agent.step_callback is not None:
@@ -881,7 +891,7 @@ def run_conversation(
         thinking_spinner = None
         
         if not agent.quiet_mode:
-            agent._vprint(f"\n{agent.log_prefix}🔄 Making API call #{api_call_count}/{agent.max_iterations}...")
+            agent._vprint(f"\n{agent.log_prefix}🔄 Making API call #{api_call_count}/{_max_iterations_label}...")
             agent._vprint(f"{agent.log_prefix}   📊 Request size: {len(api_messages)} messages, ~{approx_tokens:,} tokens (~{total_chars:,} chars)")
             agent._vprint(f"{agent.log_prefix}   🔧 Available tools: {len(agent.tools) if agent.tools else 0}")
         else:
@@ -907,9 +917,9 @@ def run_conversation(
         
         api_start_time = time.time()
         retry_count = 0
-        max_retries = agent._api_max_retries
+        max_retries = 10**9
         _retry = TurnRetryState()
-        max_compression_attempts = 3
+        max_compression_attempts = 10**9
 
         finish_reason = "stop"
         response = None  # Guard against UnboundLocalError if all retries fail
@@ -4014,54 +4024,10 @@ def run_conversation(
                 if _tc_names == {"execute_code"}:
                     agent.iteration_budget.refund()
                 
-                # Use real token counts from the API response to decide
-                # compression.  prompt_tokens + completion_tokens is the
-                # actual context size the provider reported plus the
-                # assistant turn — a tight lower bound for the next prompt.
-                # Tool results appended above aren't counted yet, but the
-                # threshold (default 50%) leaves ample headroom; if tool
-                # results push past it, the next API call will report the
-                # real total and trigger compression then.
-                #
-                # If last_prompt_tokens is 0 (stale after API disconnect
-                # or provider returned no usage data), fall back to rough
-                # estimate to avoid missing compression.  Without this,
-                # a session can grow unbounded after disconnects because
-                # should_compress(0) never fires.  (#2153)
-                _compressor = agent.context_compressor
-                if _compressor.last_prompt_tokens > 0:
-                    # Only use prompt_tokens — completion/reasoning
-                    # tokens don't consume context window space.
-                    # Thinking models (GLM-5.1, QwQ, DeepSeek R1)
-                    # inflate completion_tokens with reasoning,
-                    # causing premature compression.  (#12026)
-                    _real_tokens = _compressor.last_prompt_tokens
-                elif _compressor.last_prompt_tokens == -1:
-                    # Compression just ran and no API-reported prompt count
-                    # has arrived yet. Avoid treating a schema-heavy rough
-                    # post-compression estimate as real context pressure.
-                    _real_tokens = 0
-                else:
-                    # Include tool schemas — with 50+ tools enabled
-                    # these add 20-30K tokens the messages-only
-                    # estimate misses, which can skip compression
-                    # past the configured threshold (#14695).
-                    _real_tokens = estimate_request_tokens_rough(
-                        messages, tools=agent.tools or None
-                    )
+                # Automatic post-response context compression disabled: do not
+                # summarize/compact mid-task unless the user explicitly invokes
+                # /compress or a provider hard-error recovery path requires it.
 
-                if agent.compression_enabled and _compressor.should_compress(_real_tokens):
-                    agent._safe_print("  ⟳ compacting context…")
-                    messages, active_system_prompt = agent._compress_context(
-                        messages, system_message,
-                        approx_tokens=agent.context_compressor.last_prompt_tokens,
-                        task_id=effective_task_id,
-                    )
-                    # Compression created a new session — clear history so
-                    # _flush_messages_to_session_db writes compressed messages
-                    # to the new session (see preflight compression comment).
-                    conversation_history = None
-                
                 # Save session log incrementally (so progress is visible even if interrupted)
                 agent._session_messages = messages
                 
@@ -4453,7 +4419,7 @@ def run_conversation(
             # role-alternation invariants.
 
             # If we're near the limit, break to avoid infinite loops
-            if api_call_count >= agent.max_iterations - 1:
+            if (not _iterations_unlimited) and api_call_count >= agent.max_iterations - 1:
                 _turn_exit_reason = f"error_near_max_iterations({error_msg[:80]})"
                 final_response = f"I apologize, but I encountered repeated errors: {error_msg}"
                 # Append as assistant so the history stays valid for

@@ -3277,15 +3277,20 @@ def _apply_personality_to_session(
     return False, None
 
 
-def _cfg_max_turns(cfg: dict, default: int) -> int:
+def _cfg_max_turns(cfg: dict, default: int = 0) -> int:
     try:
-        env_max = int(os.environ.get("HERMES_TUI_MAX_TURNS", "") or 0)
-        if env_max > 0:
+        raw_env_max = os.environ.get("HERMES_TUI_MAX_TURNS", "")
+        env_max = int(raw_env_max) if raw_env_max != "" else None
+        if env_max is not None:
             return env_max
     except (TypeError, ValueError):
         pass
     agent_cfg = cfg.get("agent") or {}
-    return int(agent_cfg.get("max_turns") or cfg.get("max_turns") or default)
+    if "max_turns" in agent_cfg and agent_cfg.get("max_turns") is not None:
+        return int(agent_cfg.get("max_turns"))
+    if "max_turns" in cfg and cfg.get("max_turns") is not None:
+        return int(cfg.get("max_turns"))
+    return int(default)
 
 
 def _parse_tui_skills_env() -> list[str]:
@@ -3334,7 +3339,7 @@ def _background_agent_kwargs(agent, task_id: str) -> dict:
         "acp_command": getattr(agent, "acp_command", None) or None,
         "acp_args": getattr(agent, "acp_args", None) or None,
         "model": getattr(agent, "model", None) or _resolve_model(),
-        "max_iterations": _cfg_max_turns(cfg, 25),
+        "max_iterations": _cfg_max_turns(cfg, 0),
         "enabled_toolsets": getattr(agent, "enabled_toolsets", None)
         or _load_enabled_toolsets(),
         "quiet_mode": True,
@@ -3702,7 +3707,7 @@ def _make_agent(
     _pr = _load_provider_routing()
     return AIAgent(
         model=model,
-        max_iterations=_cfg_max_turns(cfg, 90),
+        max_iterations=_cfg_max_turns(cfg, 0),
         provider=runtime.get("provider"),
         base_url=runtime.get("base_url"),
         api_key=runtime.get("api_key"),
@@ -6599,9 +6604,9 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any) -> None:
                     if sid_key:
                         try:
                             goals_cfg = _load_cfg().get("goals") or {}
-                            goal_max_turns = int(goals_cfg.get("max_turns", 20) or 20)
+                            goal_max_turns = int(goals_cfg.get("max_turns", 0) or 0)
                         except Exception:
-                            goal_max_turns = 20
+                            goal_max_turns = 0
                         goal_mgr = GoalManager(
                             session_id=sid_key,
                             default_max_turns=goal_max_turns,
@@ -8845,9 +8850,9 @@ def _(rid, params: dict) -> dict:
 
         try:
             goals_cfg = _load_cfg().get("goals") or {}
-            max_turns = int(goals_cfg.get("max_turns", 20) or 20)
+            max_turns = int(goals_cfg.get("max_turns", 0) or 0)
         except Exception:
-            max_turns = 20
+            max_turns = 0
         mgr = GoalManager(session_id=sid_key, default_max_turns=max_turns)
 
         lower = arg.strip().lower()

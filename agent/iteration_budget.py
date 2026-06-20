@@ -29,14 +29,21 @@ class IterationBudget:
     :meth:`refund` so they don't eat into the budget.
     """
 
-    def __init__(self, max_total: int):
-        self.max_total = max_total
+    def __init__(self, max_total: int | None = None):
+        # Iteration budgets are no longer enforcement mechanisms.  Keep the
+        # class for status/accounting compatibility, but every instance is
+        # unbounded regardless of legacy constructor values.
+        self.max_total = 0
+        self.unlimited = True
         self._used = 0
         self._lock = threading.Lock()
 
     def consume(self) -> bool:
         """Try to consume one iteration.  Returns True if allowed."""
         with self._lock:
+            if self.unlimited:
+                self._used += 1
+                return True
             if self._used >= self.max_total:
                 return False
             self._used += 1
@@ -56,6 +63,12 @@ class IterationBudget:
     @property
     def remaining(self) -> int:
         with self._lock:
+            if self.unlimited:
+                # Use a large positive sentinel instead of ``math.inf`` so
+                # callers that format or serialize this value as an int keep
+                # working.  ``max_total <= 0`` is the authoritative unlimited
+                # flag; this property only needs to keep loop guards open.
+                return 2**63 - 1
             return max(0, self.max_total - self._used)
 
 

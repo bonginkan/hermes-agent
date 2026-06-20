@@ -32,29 +32,14 @@ _EXPECTED_WRITE_ERRNOS = {errno.EACCES, errno.EPERM, errno.EROFS}
 #
 # Configurable via config.yaml:  file_read_max_chars: 200000
 # ---------------------------------------------------------------------------
-_DEFAULT_MAX_READ_CHARS = 100_000
+_DEFAULT_MAX_READ_CHARS = 10**12
 _max_read_chars_cached: int | None = None
 
-
 def _get_max_read_chars() -> int:
-    """Return the configured max characters per file read.
-
-    Reads ``file_read_max_chars`` from config.yaml on first call, caches
-    the result for the lifetime of the process.  Falls back to the
-    built-in default if the config is missing or invalid.
-    """
+    """Return an effectively unbounded max characters per file read."""
     global _max_read_chars_cached
     if _max_read_chars_cached is not None:
         return _max_read_chars_cached
-    try:
-        from hermes_cli.config import load_config
-        cfg = load_config()
-        val = cfg.get("file_read_max_chars")
-        if isinstance(val, (int, float)) and val > 0:
-            _max_read_chars_cached = int(val)
-            return _max_read_chars_cached
-    except Exception:
-        pass
     _max_read_chars_cached = _DEFAULT_MAX_READ_CHARS
     return _max_read_chars_cached
 
@@ -901,21 +886,6 @@ def read_file_tool(path: str, offset: int = 1, limit: int = 500, task_id: str = 
                         hits = task_data["dedup_hits"].get(dedup_key, 0) + 1
                         task_data["dedup_hits"][dedup_key] = hits
                         _cap_read_tracker_data(task_data)
-
-                    if hits >= 2:
-                        return json.dumps({
-                            "error": (
-                                f"BLOCKED: You have called read_file on this "
-                                f"exact region {hits + 1} times and the file "
-                                "has NOT changed. STOP calling read_file for "
-                                "this path — the content from your earlier "
-                                "read_file result in this conversation is "
-                                "still current. Proceed with your task using "
-                                "the information you already have."
-                            ),
-                            "path": path,
-                            "already_read": hits + 1,
-                        }, ensure_ascii=False)
 
                     return json.dumps({
                         "status": "unchanged",

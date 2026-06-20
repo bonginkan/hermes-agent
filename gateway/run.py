@@ -1284,16 +1284,28 @@ def _bridge_max_turns_from_config(home: "Path") -> None:
 
     agent_cfg = cfg.get("agent", {})
     if isinstance(agent_cfg, dict) and "max_turns" in agent_cfg:
-        os.environ["HERMES_MAX_ITERATIONS"] = str(agent_cfg["max_turns"])
+        # ``HERMES_MAX_ITERATIONS`` is now legacy metadata only. Non-positive
+        # / null config means unbounded autonomous operation; expose that as 0
+        # for old call sites that still parse an integer.
+        try:
+            _raw_max = agent_cfg["max_turns"]
+            _max_iter = 0 if _raw_max is None else int(_raw_max)
+        except (TypeError, ValueError):
+            _max_iter = 0
+        os.environ.pop("HERMES_MAX_ITERATIONS", None)
 
 
 def _current_max_iterations() -> int:
-    """Return the current per-turn iteration budget after runtime env refresh."""
+    """Return legacy max-iteration metadata after runtime env refresh.
+
+    A non-positive value means unbounded; the conversation loop no longer uses
+    this as a stop condition.
+    """
     _reload_runtime_env_preserving_config_authority()
     try:
-        return int(os.getenv("HERMES_MAX_ITERATIONS", "90"))
+        return int(os.getenv("HERMES_MAX_ITERATIONS", "0"))
     except (TypeError, ValueError):
-        return 90
+        return 0
 
 
 from contextlib import contextmanager as _contextmanager
@@ -1398,6 +1410,7 @@ if _config_path.exists():
                 "backend": "TERMINAL_ENV",
                 "cwd": "TERMINAL_CWD",
                 "timeout": "TERMINAL_TIMEOUT",
+                "max_foreground_timeout": "TERMINAL_MAX_FOREGROUND_TIMEOUT",
                 "home_mode": "TERMINAL_HOME_MODE",
                 "lifetime_seconds": "TERMINAL_LIFETIME_SECONDS",
                 "docker_image": "TERMINAL_DOCKER_IMAGE",
@@ -1489,7 +1502,12 @@ if _config_path.exists():
         _agent_cfg = _cfg.get("agent", {})
         if _agent_cfg and isinstance(_agent_cfg, dict):
             if "max_turns" in _agent_cfg:
-                os.environ["HERMES_MAX_ITERATIONS"] = str(_agent_cfg["max_turns"])
+                try:
+                    _raw_max = _agent_cfg["max_turns"]
+                    _max_iter = 0 if _raw_max is None else int(_raw_max)
+                except (TypeError, ValueError):
+                    _max_iter = 0
+                os.environ.pop("HERMES_MAX_ITERATIONS", None)
             if "gateway_timeout" in _agent_cfg:
                 os.environ["HERMES_AGENT_TIMEOUT"] = str(_agent_cfg["gateway_timeout"])
             if "gateway_timeout_warning" in _agent_cfg:
@@ -4289,8 +4307,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     elapsed_min = int((now - start_ts) / 60)
                     if elapsed_min > 0:
                         status_parts.append(f"{elapsed_min} min elapsed")
-                if max_iter:
-                    status_parts.append(f"iteration {iteration}/{max_iter}")
+                status_parts.append(f"iteration {iteration}/∞")
                 if current_tool:
                     status_parts.append(f"running: {current_tool}")
             except Exception:
@@ -5186,11 +5203,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # config.yaml → env bridge did the right thing at a glance (instead
         # of silently running at a stale .env value for weeks).
         try:
-            _effective_max_iter = int(os.getenv("HERMES_MAX_ITERATIONS", "90"))
+            _effective_max_iter = int(os.getenv("HERMES_MAX_ITERATIONS", "0"))
+            _budget_label = "unlimited" if _effective_max_iter <= 0 else str(_effective_max_iter)
             logger.info(
-                "Agent budget: max_iterations=%d (agent.max_turns from config.yaml, "
-                "or HERMES_MAX_ITERATIONS from .env, or default 90)",
-                _effective_max_iter,
+                "Agent budget: max_iterations=%s (iteration enforcement disabled; "
+                "agent.max_turns/HERMES_MAX_ITERATIONS retained as metadata)",
+                _budget_label,
             )
         except Exception:
             pass
@@ -7478,7 +7496,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # wall-clock age alone isn't sufficient.  Evict only when the agent
         # has been *idle* beyond the inactivity threshold (or when the agent
         # object has no activity tracker and wall-clock age is extreme).
-        _raw_stale_timeout = _float_env("HERMES_AGENT_TIMEOUT", 1800)
+        _raw_stale_timeout = 0.0
         _stale_ts = self._running_agents_ts.get(_quick_key, 0)
         if _quick_key in self._running_agents and _stale_ts:
             _stale_age = time.time() - _stale_ts
@@ -7497,7 +7515,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     _stale_detail = (
                         f" | last_activity={_sa.get('last_activity_desc', 'unknown')} "
                         f"({_stale_idle:.0f}s ago) "
-                        f"| iteration={_sa.get('api_call_count', 0)}/{_sa.get('max_iterations', 0)}"
+                        f"| iteration={_sa.get('api_call_count', 0)}/∞"
                     )
                 except Exception:
                     pass
@@ -9139,20 +9157,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     # 85% * 1.4 = 119% of context — which exceeds the model's limit
                     # and prevented hygiene from ever firing for ~200K models (GLM-5).
 
-                # Hard safety valve: force compression if message count is
-                # extreme, regardless of token estimates.  This breaks the
-                # death spiral where API disconnects prevent token data
-                # collection, which prevents compression, which causes more
-                # disconnects.  400 messages is well above normal sessions
-                # but catches runaway growth before it becomes unrecoverable.
-                # Threshold is configurable via
-                # compression.hygiene_hard_message_limit.
-                # (#2153)
-                _HARD_MSG_LIMIT = _hyg_hard_msg_limit
-                _needs_compress = (
-                    _approx_tokens >= _compress_token_threshold
-                    or _msg_count >= _HARD_MSG_LIMIT
-                )
+                # Session hygiene auto-compression disabled: do not summarize or
+                # rotate transcripts before the user-visible task runs.
+                _needs_compress = False
 
                 if _needs_compress:
                     logger.info(
@@ -9186,7 +9193,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                                 _hyg_agent = AIAgent(
                                     **_hyg_runtime,
                                     model=_hyg_model,
-                                    max_iterations=4,
+                                    max_iterations=0,
                                     quiet_mode=True,
                                     skip_memory=True,
                                     enabled_toolsets=["memory"],
@@ -10399,9 +10406,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 from hermes_cli.config import load_config
 
                 goals_cfg = (load_config() or {}).get("goals") or {}
-            return int(goals_cfg.get("max_turns", 20) or 20)
+            return int(goals_cfg.get("max_turns", 0) or 0)
         except Exception:
-            return 20
+            return 0
 
     def _get_goal_manager_for_event(self, event: "MessageEvent"):
         """Return a GoalManager bound to the session for this gateway event.
@@ -15543,10 +15550,14 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     return "[clarify prompt could not be delivered]"
 
                 timeout = _clarify_mod.get_clarify_timeout()
-                response = _clarify_mod.wait_for_response(clarify_id, timeout=float(timeout))
+                _clarify_timeout = None if timeout is None else float(timeout)
+                response = _clarify_mod.wait_for_response(
+                    clarify_id,
+                    timeout=_clarify_timeout,
+                )
                 if response is None or response == "":
-                    # Timeout or session-boundary cancellation
-                    return f"[user did not respond within {int(timeout / 60)}m]"
+                    # Session-boundary cancellation or explicit interruption.
+                    return "[clarify wait cancelled]"
                 return response
 
             agent.clarify_callback = _clarify_callback_sync
@@ -16209,7 +16220,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # Config: agent.gateway_notify_interval in config.yaml, or
         # HERMES_AGENT_NOTIFY_INTERVAL env var.  Default 180s (3 min).
         # 0 = disable notifications.
-        _NOTIFY_INTERVAL_RAW = _float_env("HERMES_AGENT_NOTIFY_INTERVAL", 180)
+        _NOTIFY_INTERVAL_RAW = _float_env("HERMES_AGENT_NOTIFY_INTERVAL", 0)
         _NOTIFY_INTERVAL = _NOTIFY_INTERVAL_RAW if _NOTIFY_INTERVAL_RAW > 0 else None
         if not bool(
             resolve_display_setting(
@@ -16305,11 +16316,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             #
             # Config: agent.gateway_timeout in config.yaml, or
             # HERMES_AGENT_TIMEOUT env var (env var takes precedence).
-            # Default 1800s (30 min inactivity).  0 = unlimited.
-            _agent_timeout_raw = _float_env("HERMES_AGENT_TIMEOUT", 1800)
-            _agent_timeout = _agent_timeout_raw if _agent_timeout_raw > 0 else None
-            _agent_warning_raw = _float_env("HERMES_AGENT_TIMEOUT_WARNING", 900)
-            _agent_warning = _agent_warning_raw if _agent_warning_raw > 0 else None
+            # Default: unlimited.  User interrupts still stop the turn.
+            _agent_timeout = float("inf")
+            _agent_warning = None
             _warning_fired = False
             _executor_task = asyncio.ensure_future(
                 self._run_in_executor_with_context(run_sync)

@@ -364,7 +364,7 @@ class AIAgent:
         command: str = None,
         args: list[str] | None = None,
         model: str = "",
-        max_iterations: int = 90,  # Default tool-calling iterations (shared with subagents)
+        max_iterations: int = 0,  # Iteration cap disabled for autonomous runs
         tool_delay: float = 1.0,
         enabled_toolsets: List[str] = None,
         disabled_toolsets: List[str] = None,
@@ -1091,14 +1091,14 @@ class AIAgent:
             )
         return hostname == "api.githubcopilot.com"
 
-    def _resolved_api_call_timeout(self) -> float:
+    def _resolved_api_call_timeout(self) -> Optional[float]:
         """Resolve the effective per-call request timeout in seconds.
 
         Priority:
           1. ``providers.<id>.models.<model>.timeout_seconds`` (per-model override)
           2. ``providers.<id>.request_timeout_seconds`` (provider-wide)
           3. ``HERMES_API_TIMEOUT`` env var (legacy escape hatch)
-          4. 1800.0s default
+          4. no timeout by default
 
         Used by OpenAI-wire chat completions (streaming and non-streaming) so
         the per-provider config knob wins over the 1800s default.  Without this
@@ -1109,7 +1109,14 @@ class AIAgent:
         cfg = get_provider_request_timeout(self.provider, self.model)
         if cfg is not None:
             return cfg
-        return env_float("HERMES_API_TIMEOUT", 1800.0)
+        raw = os.getenv("HERMES_API_TIMEOUT")
+        if raw:
+            try:
+                val = float(raw)
+                return val if val > 0 else None
+            except (TypeError, ValueError):
+                return None
+        return None
 
     def _resolved_api_call_stale_timeout_base(self) -> tuple[float, bool]:
         """Resolve the base non-stream stale timeout and whether it is implicit.
@@ -1137,7 +1144,7 @@ class AIAgent:
         if env_timeout is not None:
             return float(env_timeout), False
 
-        return 90.0, True
+        return float("inf"), True
 
     def _compute_non_stream_stale_timeout(self, api_payload: Any) -> float:
         """Compute the effective non-stream stale timeout for this request.
@@ -2746,30 +2753,11 @@ class AIAgent:
                 + "the request was interrupted mid-call before a reply was "
                 "received. Send `continue` to retry."
             )
-        if reason == "budget_exhausted":
-            return (
-                prefix
-                + "the per-turn iteration/cost budget was exhausted before a "
-                "final answer. Send `continue` to keep going."
-            )
         if reason == "ollama_runtime_context_too_small":
             return (
                 prefix
                 + "the local model's context window was too small to finish. "
                 "Increase the context size or use a larger model."
-            )
-        if reason.startswith("max_iterations_reached"):
-            return (
-                prefix
-                + "the maximum tool-iteration limit was reached before a "
-                "final answer. Send `continue` to keep going, or raise "
-                "`max_iterations`."
-            )
-        if reason.startswith("error_near_max_iterations"):
-            return (
-                prefix
-                + "an error occurred near the iteration limit before a final "
-                "answer. Check the tool output above, then send `continue`."
             )
         if reason == "pending_tool_result":
             return (

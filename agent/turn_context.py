@@ -265,73 +265,10 @@ def build_turn_context(
             exc_info=True,
         )
 
-    # ── Preflight context compression ──
-    if (
-        agent.compression_enabled
-        and len(messages) > agent.context_compressor.protect_first_n
-                            + agent.context_compressor.protect_last_n + 1
-    ):
-        _preflight_tokens = estimate_request_tokens_rough(
-            messages,
-            system_prompt=active_system_prompt or "",
-            tools=agent.tools or None,
-        )
-        _compressor = agent.context_compressor
-        _defer_preflight = getattr(
-            _compressor,
-            "should_defer_preflight_to_real_usage",
-            lambda _tokens: False,
-        )
-        _preflight_deferred = _defer_preflight(_preflight_tokens)
-
-        if not _preflight_deferred:
-            _last = _compressor.last_prompt_tokens
-            # Do NOT overwrite the -1 sentinel (#36718).
-            if _last >= 0 and _preflight_tokens > _last:
-                _compressor.last_prompt_tokens = _preflight_tokens
-
-        if _preflight_deferred:
-            logger.info(
-                "Skipping preflight compression: rough estimate ~%s >= %s, "
-                "but last real provider prompt was %s after compression",
-                f"{_preflight_tokens:,}",
-                f"{_compressor.threshold_tokens:,}",
-                f"{_compressor.last_real_prompt_tokens:,}",
-            )
-        elif _compressor.should_compress(_preflight_tokens):
-            logger.info(
-                "Preflight compression: ~%s tokens >= %s threshold (model %s, ctx %s)",
-                f"{_preflight_tokens:,}",
-                f"{_compressor.threshold_tokens:,}",
-                agent.model,
-                f"{_compressor.context_length:,}",
-            )
-            agent._emit_status(
-                f"📦 Preflight compression: ~{_preflight_tokens:,} tokens "
-                f">= {_compressor.threshold_tokens:,} threshold. "
-                "This may take a moment."
-            )
-            for _pass in range(3):
-                _orig_len = len(messages)
-                messages, active_system_prompt = agent._compress_context(
-                    messages, system_message, approx_tokens=_preflight_tokens,
-                    task_id=effective_task_id,
-                )
-                if len(messages) >= _orig_len:
-                    break  # Cannot compress further
-                conversation_history = None
-                agent._empty_content_retries = 0
-                agent._thinking_prefill_retries = 0
-                agent._last_content_with_tools = None
-                agent._last_content_tools_all_housekeeping = False
-                agent._mute_post_response = False
-                _preflight_tokens = estimate_request_tokens_rough(
-                    messages,
-                    system_prompt=active_system_prompt or "",
-                    tools=agent.tools or None,
-                )
-                if not _compressor.should_compress(_preflight_tokens):
-                    break
+    # ── Preflight context compression disabled ──
+    # Automatic summarization/compaction must not interrupt autonomous work.
+    # Manual /compress remains available, and provider hard context errors are
+    # handled in the main loop when they occur.
 
     # Plugin hook: pre_llm_call (context injected into user message, not system prompt).
     plugin_user_context = ""

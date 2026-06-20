@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 # Constants & defaults
 # ──────────────────────────────────────────────────────────────────────
 
-DEFAULT_MAX_TURNS = 20
+DEFAULT_MAX_TURNS = 0
 DEFAULT_JUDGE_TIMEOUT = 30.0
 # Judge output budget. The freeform judge returns a one-line JSON verdict, but
 # reasoning models (deepseek-v4, qwq, etc.) burn tokens on hidden reasoning
@@ -65,7 +65,7 @@ _JUDGE_RESPONSE_SNIPPET_CHARS = 4000
 # JSON reply contract; without it the loop runs until the turn budget is
 # exhausted with every reply shaped like `judge returned empty response` or
 # `judge reply was not JSON`.
-DEFAULT_MAX_CONSECUTIVE_PARSE_FAILURES = 3
+DEFAULT_MAX_CONSECUTIVE_PARSE_FAILURES = 0
 
 
 CONTINUATION_PROMPT_TEMPLATE = (
@@ -174,7 +174,7 @@ class GoalState:
             goal=data.get("goal", ""),
             status=data.get("status", "active"),
             turns_used=int(data.get("turns_used", 0) or 0),
-            max_turns=int(data.get("max_turns", DEFAULT_MAX_TURNS) or DEFAULT_MAX_TURNS),
+            max_turns=int(data.get("max_turns", DEFAULT_MAX_TURNS) or 0),
             created_at=float(data.get("created_at", 0.0) or 0.0),
             last_turn_at=float(data.get("last_turn_at", 0.0) or 0.0),
             last_verdict=data.get("last_verdict"),
@@ -487,7 +487,7 @@ class GoalManager:
 
     def __init__(self, session_id: str, *, default_max_turns: int = DEFAULT_MAX_TURNS):
         self.session_id = session_id
-        self.default_max_turns = int(default_max_turns or DEFAULT_MAX_TURNS)
+        self.default_max_turns = int(default_max_turns or 0)
         self._state: Optional[GoalState] = load_goal(session_id)
 
     # --- introspection ------------------------------------------------
@@ -506,7 +506,7 @@ class GoalManager:
         s = self._state
         if s is None or s.status in {"cleared",}:
             return "No active goal. Set one with /goal <text>."
-        turns = f"{s.turns_used}/{s.max_turns} turns"
+        turns = f"{s.turns_used}/{'∞' if s.max_turns <= 0 else s.max_turns} turns"
         sub = f", {len(s.subgoals)} subgoal{'s' if len(s.subgoals) != 1 else ''}" if s.subgoals else ""
         if s.status == "active":
             return f"⊙ Goal (active, {turns}{sub}): {s.goal}"
@@ -684,7 +684,10 @@ class GoalManager:
         # contract (e.g. google/gemini-3-flash-preview). Without this guard,
         # weak judge models burn the entire turn budget returning prose or
         # empty strings.
-        if state.consecutive_parse_failures >= DEFAULT_MAX_CONSECUTIVE_PARSE_FAILURES:
+        if (
+            DEFAULT_MAX_CONSECUTIVE_PARSE_FAILURES > 0
+            and state.consecutive_parse_failures >= DEFAULT_MAX_CONSECUTIVE_PARSE_FAILURES
+        ):
             state.status = "paused"
             state.paused_reason = (
                 f"judge model returned unparseable output {state.consecutive_parse_failures} turns in a row"
@@ -708,7 +711,7 @@ class GoalManager:
                 ),
             }
 
-        if state.turns_used >= state.max_turns:
+        if state.max_turns > 0 and state.turns_used >= state.max_turns:
             state.status = "paused"
             state.paused_reason = f"turn budget exhausted ({state.turns_used}/{state.max_turns})"
             save_goal(self.session_id, state)
@@ -732,7 +735,7 @@ class GoalManager:
             "verdict": "continue",
             "reason": reason,
             "message": (
-                f"↻ Continuing toward goal ({state.turns_used}/{state.max_turns}): {reason}"
+                f"↻ Continuing toward goal ({state.turns_used}/∞): {reason}"
             ),
         }
 
@@ -822,9 +825,8 @@ def run_kanban_goal_loop(
             except Exception:
                 pass
 
-    max_turns = int(max_turns or DEFAULT_MAX_TURNS)
-    if max_turns < 1:
-        max_turns = DEFAULT_MAX_TURNS
+    max_turns = int(max_turns or 0)
+    _max_turns_label = "∞" if max_turns <= 0 else str(max_turns)
 
     last_response = first_response or ""
     # The first turn already consumed one unit of budget.
@@ -852,7 +854,7 @@ def run_kanban_goal_loop(
 
         # Still open — judge whether the latest response satisfies the card.
         verdict, reason, _parse_failed = judge_goal(goal_text, last_response)
-        _log(f"kanban goal loop: turn {turns_used}/{max_turns} verdict={verdict} reason={_truncate(reason, 120)}")
+        _log(f"kanban goal loop: turn {turns_used}/{_max_turns_label} verdict={verdict} reason={_truncate(reason, 120)}")
 
         if verdict == "done":
             if nudged_to_finalize:
@@ -873,7 +875,7 @@ def run_kanban_goal_loop(
             prompt = KANBAN_GOAL_CONTINUATION_TEMPLATE.format(reason=_truncate(reason, 400))
 
         # Budget check BEFORE spending another turn.
-        if turns_used >= max_turns:
+        if max_turns > 0 and turns_used >= max_turns:
             _log(f"kanban goal loop: task {task_id} exhausted {turns_used}/{max_turns} turns; blocking")
             try:
                 block_fn(

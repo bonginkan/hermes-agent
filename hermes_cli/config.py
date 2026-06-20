@@ -890,12 +890,12 @@ DEFAULT_CONFIG = {
     # None/0 = unbounded.
     "max_concurrent_sessions": None,
     "agent": {
-        "max_turns": 90,
+        "max_turns": 0,
         # Inactivity timeout for gateway agent execution (seconds).
         # The agent can run indefinitely as long as it's actively calling
         # tools or receiving API responses.  Only fires when the agent has
-        # been completely idle for this duration.  0 = unlimited.
-        "gateway_timeout": 1800,
+        # been completely idle for this duration.  None/unset = unlimited.
+        "gateway_timeout": None,
         # Graceful drain timeout for gateway stop/restart (seconds).
         # The gateway stops accepting new work, waits for running agents
         # to finish, then interrupts any remaining runs after the timeout.
@@ -967,16 +967,11 @@ DEFAULT_CONFIG = {
         #   "on"             — force the prompt posture everywhere.
         #   "off"            — disable entirely.
         "coding_context": "auto",
-        # Staged inactivity warning: send a warning to the user at this
-        # threshold before escalating to a full timeout.  The warning fires
-        # once per run and does not interrupt the agent.  0 = disable warning.
-        "gateway_timeout_warning": 900,
-        # Maximum time (seconds) the gateway will block an agent waiting for
-        # a clarify-tool response from the user.  Hit this and the agent
-        # unblocks with "[user did not respond within Xm]" so it can adapt
-        # rather than pinning the running-agent guard forever.  CLI clarify
-        # blocks indefinitely (input() is synchronous) and ignores this.
-        "clarify_timeout": 600,
+        # Staged inactivity warning.  None/unset disables it.
+        "gateway_timeout_warning": None,
+        # Optional cap for gateway clarify waits.  None/unset waits until the
+        # user responds, cancels the session, or interrupts the agent.
+        "clarify_timeout": None,
         # Periodic "still working" notification interval (seconds).
         # Sends a status message every N seconds so the user knows the
         # agent hasn't died during long tasks.  0 = disable notifications.
@@ -984,7 +979,7 @@ DEFAULT_CONFIG = {
         # noise; 180s is a compromise that catches spinning weak-model runs
         # (60+ tool iterations with tiny output) before users assume the
         # bot is dead and /restart.
-        "gateway_notify_interval": 180,
+        "gateway_notify_interval": 0,
         # Freshness window for the gateway auto-continue note (seconds).
         # After a gateway crash/restart/SIGTERM mid-run, the next user
         # message gets a "[System note: your previous turn was
@@ -1020,7 +1015,8 @@ DEFAULT_CONFIG = {
         "backend": "local",
         "modal_mode": "auto",
         "cwd": ".",  # Use current directory
-        "timeout": 180,
+        "timeout": 0,
+        "max_foreground_timeout": 0,
         # Environment variables to pass through to sandboxed execution
         # (terminal and execute_code).  Skill-declared required_environment_variables
         # are passed through automatically; this list is for non-skill use cases.
@@ -1111,8 +1107,8 @@ DEFAULT_CONFIG = {
     },
 
     "browser": {
-        "inactivity_timeout": 120,
-        "command_timeout": 30,  # Timeout for browser commands in seconds (screenshot, navigate, etc.)
+        "inactivity_timeout": 0,
+        "command_timeout": None,  # Optional timeout for browser commands; None = no automatic timeout
         "record_sessions": False,  # Auto-record browser sessions as WebM videos
         "allow_private_urls": False,  # Allow navigating to private/internal IPs (localhost, 192.168.x.x, etc.)
         # Browser engine for local mode.  Passed as ``--engine <value>`` to
@@ -1908,8 +1904,7 @@ DEFAULT_CONFIG = {
         # extras" without silently stripping MCP tools the parent already has.
         # Set to false for strict intersection.
         "inherit_mcp_toolsets": True,
-        "max_iterations": 50,  # per-subagent iteration cap (each subagent gets its own budget,
-                               # independent of the parent's max_iterations)
+        "max_iterations": 0,  # per-subagent iteration cap; 0 = no cap
         "child_timeout_seconds": 0,  # optional wall-clock cap per child agent. 0 (default)
                                      # = no timeout: children fail only from real errors
                                      # (API, tools, iteration budget), never a delegation
@@ -1953,7 +1948,7 @@ DEFAULT_CONFIG = {
         # asks the user to /goal resume. Protects against judge false
         # negatives (goal actually done but judge says continue) and
         # unbounded model spend on fuzzy / unachievable goals.
-        "max_turns": 20,
+        "max_turns": 0,
     },
 
     # Skills — external skill directories for sharing skills across tools/agents.
