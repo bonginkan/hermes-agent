@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import time
 from unittest.mock import patch
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import pytest
 
@@ -20,6 +20,7 @@ from agent.transports.codex_app_server_session import (
     _approval_choice_to_codex_decision,
     _coerce_turn_input_text,
 )
+from agent.transports.codex_app_server import CodexAppServerError
 
 
 class FakeClient:
@@ -37,7 +38,7 @@ class FakeClient:
         self._closed = False
         self._notifications: list[dict] = []
         self._server_requests: list[dict] = []
-        self._request_handler = None  # Optional[Callable[[str, dict], dict]]
+        self._request_handler: Optional[Callable[[str, dict], dict]] = None
 
     # API matching CodexAppServerClient
     def initialize(self, **kwargs):
@@ -229,6 +230,81 @@ class TestRunTurn:
         assert r.token_usage_last["totalTokens"] == 130
         assert r.token_usage_total["totalTokens"] == 500
         assert r.model_context_window == 200000
+
+    def test_context_compaction_item_sets_lifecycle_flag(self):
+        client = FakeClient()
+        client.queue_notification(
+            "item/completed",
+            item={"type": "contextCompaction", "id": "cx1"},
+            threadId="thread-fake-001",
+            turnId="turn-fake-001",
+        )
+        client.queue_notification(
+            "item/completed",
+            item={"type": "agentMessage", "id": "m1", "text": "after compact"},
+            threadId="thread-fake-001",
+            turnId="turn-fake-001",
+        )
+        client.queue_notification(
+            "turn/completed",
+            threadId="thread-fake-001",
+            turn={"id": "turn-fake-001", "status": "completed", "error": None},
+        )
+
+        r = make_session(client).run_turn("hi", turn_timeout=2.0)
+
+        assert r.context_compacted is True
+        assert r.context_compaction_count == 1
+        assert r.final_text == "after compact"
+        assert not any(
+            "contextCompaction" in str(msg.get("content"))
+            for msg in r.projected_messages
+        )
+
+    def test_turn_start_context_overflow_asks_codex_to_compact_and_retries(self):
+        client = FakeClient()
+        turn_start_attempts = 0
+
+        def handler(method, params):
+            nonlocal turn_start_attempts
+            if method == "thread/start":
+                return {"thread": {"id": "thread-fake-001"}}
+            if method == "thread/compact/start":
+                client.queue_notification(
+                    "thread/compacted",
+                    threadId=params["threadId"],
+                    turnId="compact-turn-1",
+                )
+                return {}
+            if method == "turn/start":
+                turn_start_attempts += 1
+                if turn_start_attempts == 1:
+                    raise CodexAppServerError(
+                        code=-32603,
+                        message="context window exceeded: prompt is too long",
+                    )
+                client.queue_notification(
+                    "item/completed",
+                    item={"type": "agentMessage", "id": "m1", "text": "recovered"},
+                    threadId="thread-fake-001",
+                    turnId="turn-fake-001",
+                )
+                client.queue_notification(
+                    "turn/completed",
+                    threadId="thread-fake-001",
+                    turn={"id": "turn-fake-001", "status": "completed", "error": None},
+                )
+                return {"turn": {"id": "turn-fake-001"}}
+            return {}
+
+        client._request_handler = handler
+        r = make_session(client).run_turn("hi", turn_timeout=2.0)
+
+        assert turn_start_attempts == 2
+        assert ("thread/compact/start", {"threadId": "thread-fake-001"}) in client.requests
+        assert r.context_compacted is True
+        assert r.error is None
+        assert r.final_text == "recovered"
 
     def test_rich_content_turn_is_collapsed_to_text_payload(self):
         client = FakeClient()

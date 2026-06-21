@@ -126,11 +126,24 @@ The kanban tools are gated by `HERMES_KANBAN_TASK` env var the dispatcher sets â
 | User MCP servers | yes | yes (auto-migrated to codex) |
 | Memory + skill review (background) | yes | yes (via item projection) |
 | Multi-turn conversations | yes | yes |
+| Context compaction | Hermes summarizer | Codex thread compaction; Hermes syncs the boundary without re-summarizing |
 | `/goal` (Ralph loop) | yes | yes |
 | Kanban worker dispatch | yes | yes (via callback) |
 | Kanban orchestrator tools | yes | yes (via callback) |
 | All gateway platforms | yes | yes |
 | Non-OpenAI providers | yes | n/a â€” OpenAI/Codex-scoped |
+
+## Context compaction sync
+
+On the `codex_app_server` runtime, Codex owns the model context. Hermes does
+not run its own threshold/preflight summarizer for those turns. When Codex emits
+a modern `contextCompaction` item (or the legacy `thread/compacted`
+notification), Hermes treats that as the source of truth: it trims the projected
+Hermes/gateway history to a small boundary marker plus the current turn, while
+leaving the live Codex thread and its internal summary intact. If `turn/start`
+fails because the Codex thread is over its context window, Hermes asks Codex to
+run `thread/compact/start` and retries the same user turn once; it does not ask
+the user to press `/compress` first.
 
 ## Prerequisites
 

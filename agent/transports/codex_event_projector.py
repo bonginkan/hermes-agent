@@ -59,11 +59,17 @@ class ProjectionResult:
     `messages` is a list because some Codex items produce two messages
     (assistant tool_call + tool result). Empty list = item ignored (e.g. a
     streaming `outputDelta` that doesn't materialize into messages until the
-    `item/completed` event)."""
+    `item/completed` event).
+
+    `context_compacted` is a lifecycle signal, not a transcript message:
+    Codex already compacted the thread internally, so Hermes should trim/sync
+    its projected history without inventing an assistant utterance.
+    """
 
     messages: list[dict] = field(default_factory=list)
     is_tool_iteration: bool = False
     final_text: Optional[str] = None  # Set when an agentMessage completes
+    context_compacted: bool = False
 
 
 class CodexEventProjector:
@@ -108,6 +114,8 @@ class CodexEventProjector:
             return self._project_dynamic_tool_call(item, item_id)
         if item_type == "userMessage":
             return self._project_user_message(item)
+        if item_type == "contextCompaction":
+            return ProjectionResult(context_compacted=True)
 
         # Unknown / rare items (plan, hookPrompt, collabAgentToolCall, etc.)
         # — record as opaque assistant note so memory review can still see

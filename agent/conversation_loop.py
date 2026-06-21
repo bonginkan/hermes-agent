@@ -556,6 +556,7 @@ def run_conversation(
             user_message=user_message,
             original_user_message=original_user_message,
             messages=messages,
+            current_turn_user_idx=current_turn_user_idx,
             effective_task_id=effective_task_id,
             should_review_memory=_should_review_memory,
         )
@@ -2654,60 +2655,17 @@ def run_conversation(
                 # compress history and retry, not abort immediately.
                 status_code = getattr(api_error, "status_code", None)
 
-                # ── Respect disabled auto-compaction on overflow ──────
-                # Ported from anomalyco/opencode#30749.  When the user has
-                # turned auto-compaction off (``compression.enabled: false``),
-                # NO automatic compaction trigger may fire — including the
-                # provider/request-size overflow recovery paths below
-                # (long-context-tier 429, 413 payload-too-large, and
-                # context-overflow).  Without this guard the proactive
-                # threshold path correctly honours the setting (see the
-                # preflight check and the post-response ``should_compress``
-                # gate) but a provider overflow error would still silently
-                # compress + rotate the session, bypassing the user's
-                # explicit choice.  Surface a terminal error instead so the
-                # user can compact manually (``/compress``), start fresh
-                # (``/new``), switch to a larger-context model, or reduce
-                # attachments.  Forced compaction via ``/compress``
-                # (``force=True``) is unaffected — it never reaches this loop.
-                _overflow_reasons = {
-                    FailoverReason.long_context_tier,
-                    FailoverReason.payload_too_large,
-                    FailoverReason.context_overflow,
-                }
-                if (
-                    classified.reason in _overflow_reasons
-                    and not getattr(agent, "compression_enabled", True)
-                ):
-                    agent._flush_status_buffer()
-                    agent._vprint(
-                        f"{agent.log_prefix}❌ Context overflow, but auto-compaction is disabled "
-                        f"(compression.enabled: false).",
-                        force=True,
-                    )
-                    agent._vprint(
-                        f"{agent.log_prefix}   💡 Run /compress to compact manually, /new to start fresh, "
-                        f"switch to a larger-context model, or reduce attachments.",
-                        force=True,
-                    )
-                    logger.error(
-                        f"{agent.log_prefix}Context overflow ({classified.reason.value}) with "
-                        f"auto-compaction disabled — not compressing."
-                    )
-                    agent._persist_session(messages, conversation_history)
-                    return {
-                        "messages": messages,
-                        "completed": False,
-                        "api_calls": api_call_count,
-                        "error": (
-                            "Context overflow and auto-compaction is disabled "
-                            "(compression.enabled: false). Run /compress to compact manually, "
-                            "/new to start fresh, or switch to a larger-context model."
-                        ),
-                        "partial": True,
-                        "failed": True,
-                        "compaction_disabled": True,
-                    }
+                # Provider/request-size overflow recovery is a safety valve,
+                # not the proactive auto-compaction feature.  Even when the
+                # user has disabled Hermes' threshold-based auto-compaction
+                # (``compression.enabled: false``), a hard provider overflow
+                # must still be allowed to recover below (413 payload too
+                # large, context-overflow, and long-context-tier errors).
+                # Otherwise Codex/app-server runtimes never get a chance to
+                # compact internally and gateway sessions stop with a manual
+                # "/compress" instruction.  Manual/proactive Hermes
+                # compaction remains governed by the normal gates; this path
+                # only runs after the provider has already rejected the turn.
 
                 # ── Anthropic Sonnet long-context tier gate ───────────
                 # Anthropic returns HTTP 429 "Extra usage is required for

@@ -148,6 +148,40 @@ class TestRunConversationCodexPath:
                  and m.get("content") == "echo: hello"]
         assert final, f"expected final assistant message in {msgs}"
 
+    def test_codex_context_compaction_trims_hermes_history(self, monkeypatch):
+        def fake_run_turn(self, user_input: str, **kwargs):
+            return TurnResult(
+                final_text="done after compact",
+                projected_messages=[{"role": "assistant", "content": "done after compact"}],
+                turn_id="turn-compact-1",
+                thread_id="thread-compact-1",
+                context_compacted=True,
+                context_compaction_count=1,
+            )
+
+        monkeypatch.setattr(CodexAppServerSession, "run_turn", fake_run_turn)
+        monkeypatch.setattr(
+            CodexAppServerSession, "ensure_started", lambda self: "thread-compact-1"
+        )
+        agent = _make_codex_agent()
+        prior = [
+            {"role": "user", "content": "old question"},
+            {"role": "assistant", "content": "old answer"},
+        ]
+
+        with patch.object(agent, "_spawn_background_review", return_value=None):
+            result = agent.run_conversation("current request", conversation_history=prior)
+
+        msgs = result["messages"]
+        assert result["codex_context_compacted"] is True
+        assert result["codex_context_compaction_count"] == 1
+        assert msgs[0]["role"] == "assistant"
+        assert "CODEX CONTEXT COMPACTION" in msgs[0]["content"]
+        assert msgs[1] == {"role": "user", "content": "current request"}
+        assert msgs[-1] == {"role": "assistant", "content": "done after compact"}
+        assert not any(m.get("content") == "old question" for m in msgs)
+        assert not any(m.get("content") == "old answer" for m in msgs)
+
     def test_projected_messages_are_synced_to_external_memory(self, fake_session):
         agent = _make_codex_agent()
         agent._memory_manager = MagicMock()

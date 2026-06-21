@@ -75,6 +75,13 @@ class TurnResult:
     token_usage_last: Optional[dict[str, Any]] = None
     token_usage_total: Optional[dict[str, Any]] = None
     model_context_window: Optional[int] = None
+    # True when Codex reports a thread compaction (modern
+    # `contextCompaction` item or legacy `thread/compacted` notification),
+    # or when Hermes asked Codex to compact the thread as overflow recovery.
+    # Hermes uses this to trim its projected transcript to the same boundary
+    # without running its own summarizer.
+    context_compacted: bool = False
+    context_compaction_count: int = 0
     # Hint to the caller that the underlying codex subprocess is likely
     # wedged (turn-level timeout fired, post-tool watchdog tripped, or
     # token-refresh failure killed the child). The caller should retire
@@ -89,6 +96,67 @@ class TurnResult:
 # items when an interrupt or upstream error tears the turn down before the
 # normal completion path fires. Mirrors openclaw beta.8 fix.
 _TURN_ABORTED_MARKERS = ("<turn_aborted>", "<turn_aborted/>")
+
+
+_CONTEXT_OVERFLOW_HINTS = (
+    "context overflow",
+    "context_length_exceeded",
+    "context length",
+    "context window",
+    "maximum context",
+    "max context",
+    "prompt is too long",
+    "too many tokens",
+    "tokens >",
+    "payload too large",
+    "request too large",
+)
+
+
+def _looks_like_context_overflow(*parts: str) -> bool:
+    """Best-effort classifier for Codex app-server context overflow errors.
+
+    Codex versions differ on whether the overflow is raised by `turn/start`,
+    surfaced as a failed `turn/completed`, or printed to stderr. Keep this
+    local and conservative: if it smells like an over-full thread, the only
+    recovery we attempt is Codex's own `thread/compact/start` RPC.
+    """
+    haystack = " ".join(p for p in parts if p).lower()
+    if not haystack:
+        return False
+    return any(needle in haystack for needle in _CONTEXT_OVERFLOW_HINTS)
+
+
+def _mark_context_compacted(result: TurnResult) -> None:
+    if not result.context_compacted:
+        result.context_compaction_count += 1
+    result.context_compacted = True
+
+
+def _notification_is_context_compaction(note: dict) -> bool:
+    """Return True for modern and legacy Codex compaction lifecycle events."""
+    if not isinstance(note, dict):
+        return False
+    method = note.get("method", "")
+    if method == "thread/compacted":
+        return True
+    if method not in {"item/started", "item/completed"}:
+        return False
+    item = (note.get("params") or {}).get("item") or {}
+    return isinstance(item, dict) and item.get("type") == "contextCompaction"
+
+
+def _context_compaction_is_terminal(note: dict) -> bool:
+    """Return True once a Codex compaction has definitely completed."""
+    if not isinstance(note, dict):
+        return False
+    method = note.get("method", "")
+    if method == "thread/compacted":
+        return True
+    if method == "item/completed":
+        item = (note.get("params") or {}).get("item") or {}
+        return isinstance(item, dict) and item.get("type") == "contextCompaction"
+    return False
 
 
 def _coerce_turn_input_text(user_input: Any) -> str:
@@ -321,6 +389,42 @@ class CodexAppServerSession:
         and unwind. Called by AIAgent's _interrupt_requested path."""
         self._interrupt_event.set()
 
+    def compact_thread(self, *, timeout: float = 120.0) -> bool:
+        """Ask Codex to compact the current thread and wait for its lifecycle.
+
+        This deliberately uses Codex's `thread/compact/start` RPC rather than
+        Hermes' own summarizer.  It is used only as app-server overflow
+        recovery / synchronization, so Hermes does not mutate the Codex prompt
+        or synthesize a summary.
+        """
+        if self._client is None or self._thread_id is None:
+            self.ensure_started()
+        if self._client is None or self._thread_id is None:
+            return False
+        self._client.request(
+            "thread/compact/start",
+            {"threadId": self._thread_id},
+            timeout=15,
+        )
+        deadline = time.monotonic() + timeout
+        saw_compaction = False
+        while time.monotonic() < deadline:
+            if not self._client.is_alive():
+                raise RuntimeError("codex app-server exited during thread compaction")
+            note = self._client.take_notification(timeout=0.25)
+            if note is None:
+                continue
+            if self._on_event is not None:
+                try:
+                    self._on_event(note)
+                except Exception:  # pragma: no cover - display callback
+                    logger.debug("on_event callback raised", exc_info=True)
+            if _notification_is_context_compaction(note):
+                saw_compaction = True
+                if _context_compaction_is_terminal(note):
+                    return True
+        return saw_compaction
+
     # ---------- diagnostics ----------
 
     def _format_error_with_stderr(
@@ -416,22 +520,51 @@ class CodexAppServerSession:
                 timeout=10,
             )
         except CodexAppServerError as exc:
-            # Classify auth/refresh failures so the user gets a clear
-            # `codex login` pointer instead of a raw RPC error string.
             stderr_blob = "\n".join(self._client.stderr_tail(40))
-            hint = _classify_oauth_failure(exc.message, stderr_blob)
-            if hint is not None:
-                result.error = hint
-                # Subprocess is fine on a JSON-RPC level here, but the
-                # token store is broken — retire so the next turn does a
-                # clean handshake (and the user has a chance to re-auth
-                # via `codex login` between turns).
-                result.should_retire = True
+            if _looks_like_context_overflow(exc.message, str(exc.data), stderr_blob):
+                try:
+                    if self.compact_thread(timeout=120.0):
+                        _mark_context_compacted(result)
+                        logger.info(
+                            "codex app-server thread compacted after turn/start overflow"
+                        )
+                        ts = self._client.request(
+                            "turn/start",
+                            {
+                                "threadId": self._thread_id,
+                                "input": [{"type": "text", "text": user_input_text}],
+                            },
+                            timeout=10,
+                        )
+                    else:
+                        result.error = self._format_error_with_stderr(
+                            "turn/start failed and Codex compaction did not finish",
+                            exc,
+                        )
+                        return result
+                except Exception as compact_exc:
+                    result.error = self._format_error_with_stderr(
+                        "turn/start failed; Codex thread compaction recovery also failed",
+                        compact_exc,
+                    )
+                    result.should_retire = True
+                    return result
             else:
-                result.error = self._format_error_with_stderr(
-                    "turn/start failed", exc
-                )
-            return result
+                # Classify auth/refresh failures so the user gets a clear
+                # `codex login` pointer instead of a raw RPC error string.
+                hint = _classify_oauth_failure(exc.message, stderr_blob)
+                if hint is not None:
+                    result.error = hint
+                    # Subprocess is fine on a JSON-RPC level here, but the
+                    # token store is broken — retire so the next turn does a
+                    # clean handshake (and the user has a chance to re-auth
+                    # via `codex login` between turns).
+                    result.should_retire = True
+                else:
+                    result.error = self._format_error_with_stderr(
+                        "turn/start failed", exc
+                    )
+                return result
         except TimeoutError as exc:
             # turn/start hanging is a strong signal the subprocess is wedged.
             stderr_blob = "\n".join(self._client.stderr_tail(40))
@@ -507,6 +640,9 @@ class CodexAppServerSession:
                     _apply_token_usage_notification(result, pending)
                     self._track_pending_file_change(pending)
                     proj = projector.project(pending)
+                    if _notification_is_context_compaction(pending) or proj.context_compacted:
+                        _mark_context_compacted(result)
+                        last_tool_completion_at = None
                     if proj.messages:
                         result.projected_messages.extend(proj.messages)
                     if proj.is_tool_iteration:
@@ -550,6 +686,9 @@ class CodexAppServerSession:
 
             # Project into messages
             projection = projector.project(note)
+            if _notification_is_context_compaction(note) or projection.context_compacted:
+                _mark_context_compacted(result)
+                last_tool_completion_at = None
             if projection.messages:
                 result.projected_messages.extend(projection.messages)
             if projection.is_tool_iteration:

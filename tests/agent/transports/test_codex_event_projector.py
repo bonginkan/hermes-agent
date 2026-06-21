@@ -252,6 +252,16 @@ class TestUserAndOpaqueProjection:
         assert "plan" in msgs[0]["content"].lower()
         assert "tool_calls" not in msgs[0]
 
+    def test_context_compaction_is_lifecycle_not_transcript(self) -> None:
+        item = {"type": "contextCompaction", "id": "cx1"}
+        result = CodexEventProjector().project(
+            {"method": "item/completed", "params": {"item": item}}
+        )
+        assert result.messages == []
+        assert result.is_tool_iteration is False
+        assert result.final_text is None
+        assert result.context_compacted is True
+
 
 class TestHelpers:
     def test_deterministic_call_id_stable(self) -> None:

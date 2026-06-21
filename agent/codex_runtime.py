@@ -24,6 +24,42 @@ from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
+CODEX_COMPACTION_MARKER = (
+    "[CODEX CONTEXT COMPACTION — REFERENCE ONLY] Codex compacted earlier "
+    "thread context internally. Hermes is synced to that boundary and has "
+    "dropped older projected transcript rows from the live gateway history. "
+    "This marker is background only, not a user request; continue from the "
+    "latest user message after it."
+)
+
+
+def _sync_messages_after_codex_compaction(
+    messages: List[Dict[str, Any]],
+    current_turn_user_idx: int,
+) -> List[Dict[str, Any]]:
+    """Trim Hermes' projected history to Codex's compaction boundary.
+
+    Codex app-server owns the real model context and compacts it internally.
+    Hermes should therefore not run its own summarizer; it only keeps a small
+    boundary marker plus the current turn so gateway/CLI histories do not grow
+    out of sync with the Codex thread.
+    """
+    marker = {
+        "role": "assistant",
+        "content": CODEX_COMPACTION_MARKER,
+        "_hermes_compaction": {
+            "engine": "codex_app_server",
+            "summary_available": False,
+        },
+    }
+    try:
+        idx = int(current_turn_user_idx)
+    except (TypeError, ValueError):
+        idx = len(messages)
+    if idx < 0 or idx > len(messages):
+        idx = len(messages)
+    return [marker] + list(messages[idx:])
+
 
 def _coerce_usage_int(value: Any) -> int:
     if isinstance(value, bool):
@@ -179,6 +215,7 @@ def run_codex_app_server_turn(
     user_message: str,
     original_user_message: Any,
     messages: List[Dict[str, Any]],
+    current_turn_user_idx: int,
     effective_task_id: str,
     should_review_memory: bool = False,
 ) -> Dict[str, Any]:
@@ -258,6 +295,16 @@ def run_codex_app_server_turn(
     if turn.projected_messages:
         messages.extend(turn.projected_messages)
 
+    if getattr(turn, "context_compacted", False):
+        messages = _sync_messages_after_codex_compaction(
+            messages,
+            current_turn_user_idx,
+        )
+        try:
+            agent._persist_session(messages, None)
+        except Exception:
+            logger.debug("codex compaction history sync persistence failed", exc_info=True)
+
     # Counter ticks for the agent-improvement loop.
     # _turns_since_memory and _user_turn_count are ALREADY incremented
     # in the run_conversation() pre-loop block (lines ~11793-11817) so we
@@ -321,6 +368,8 @@ def run_codex_app_server_turn(
         "error": turn.error,
         "codex_thread_id": turn.thread_id,
         "codex_turn_id": turn.turn_id,
+        "codex_context_compacted": getattr(turn, "context_compacted", False),
+        "codex_context_compaction_count": getattr(turn, "context_compaction_count", 0),
         **usage_result,
     }
 
