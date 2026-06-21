@@ -868,11 +868,22 @@ class GatewaySlashCommandsMixin:
             )
             return ""
 
+        running_count = getattr(self, "_running_agent_count", lambda: 0)
+
         if self._restart_requested or self._draining:
-            count = self._running_agent_count()
+            count = running_count()
             if count:
                 return t("gateway.draining", count=count)
             return EphemeralReply(t("gateway.restart.in_progress"))
+
+        active_agents = running_count()
+        if active_agents:
+            noun = "agent" if active_agents == 1 else "agents"
+            return (
+                f"⛔ Restart skipped — {active_agents} active {noun} still running. "
+                "I won't shut down while work is in progress. "
+                "Use `/agents` to inspect, or `/stop` first if you intentionally want to cancel."
+            )
 
         # Save the requester's routing info so the new gateway process can
         # notify them once it comes back online.
@@ -924,7 +935,6 @@ class GatewaySlashCommandsMixin:
         except Exception as e:
             logger.debug("Failed to write restart dedup marker: %s", e)
 
-        active_agents = self._running_agent_count()
         # When running under a service manager (systemd/launchd) or inside a
         # Docker/Podman container, use the service restart path: exit with
         # code 75 so the service manager / container restart policy restarts
