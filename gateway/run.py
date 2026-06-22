@@ -148,6 +148,10 @@ _KABOSU_APPLICATION_ASSIST_AMBIGUOUS_TRIGGER_RE = re.compile(
     r"|(?:対応|返信|回答|返答|返事|草案|案を作|処理).{0,12}(?:これ|それ|こちら|上記)",
     re.IGNORECASE,
 )
+_KABOSU_HARNESS_MODE_TRIGGER_RE = re.compile(
+    r"(?:/?harness-init|harness\s*init)",
+    re.IGNORECASE,
+)
 
 
 def _ensure_windows_gateway_venv_imports() -> None:
@@ -428,6 +432,25 @@ def _should_run_kabosu_application_assist(message: Any, source: Any) -> bool:
     return _kabosu_application_assist_mode(message, source) is not None
 
 
+def _kabosu_harness_mode_enabled() -> bool:
+    return os.environ.get("KABOSU_HARNESS_MODE_HOOK", "1").strip().lower() not in {
+        "0",
+        "false",
+        "off",
+        "no",
+    }
+
+
+def _should_run_kabosu_harness_mode(message: Any, source: Any) -> bool:
+    if not _kabosu_harness_mode_enabled():
+        return False
+    if _gateway_platform_value(getattr(source, "platform", None)) != "discord":
+        return False
+    if not isinstance(message, str):
+        return False
+    return bool(_KABOSU_HARNESS_MODE_TRIGGER_RE.search(message))
+
+
 def _kabosu_application_assist_repo_dir() -> Path:
     configured = os.environ.get("KABOSU_APPLICATION_ASSIST_DIR")
     if configured:
@@ -448,6 +471,37 @@ def _kabosu_application_assist_timeout() -> float:
         return max(1.0, float(os.environ.get("KABOSU_APPLICATION_ASSIST_TIMEOUT", "120")))
     except (TypeError, ValueError):
         return 120.0
+
+
+def _kabosu_harness_mode_repo_dir() -> Path:
+    configured = os.environ.get("KABOSU_HARNESS_MODE_DIR")
+    if configured:
+        return Path(configured).expanduser()
+    return _kabosu_application_assist_repo_dir()
+
+
+def _kabosu_harness_mode_node() -> str:
+    configured = os.environ.get("KABOSU_HARNESS_MODE_NODE")
+    if configured:
+        return configured
+    return _kabosu_application_assist_node()
+
+
+def _kabosu_harness_mode_timeout() -> float:
+    try:
+        return max(1.0, float(os.environ.get("KABOSU_HARNESS_MODE_TIMEOUT", "15")))
+    except (TypeError, ValueError):
+        return 15.0
+
+
+def _kabosu_harness_mode_cwd(repo_dir: Path) -> Path:
+    configured = os.environ.get("KABOSU_HARNESS_MODE_CWD")
+    if configured:
+        return Path(configured).expanduser()
+    configured_cwd = os.environ.get("TERMINAL_CWD")
+    if configured_cwd and configured_cwd not in {".", "auto", "cwd"}:
+        return Path(configured_cwd).expanduser()
+    return repo_dir
 
 
 def _discord_message_link_from_source(source: Any, event_message_id: Optional[str]) -> Optional[str]:
@@ -490,6 +544,26 @@ def _append_kabosu_application_assist_context(message: str, assist_content: str)
             "says it cannot draft, explain the missing information clearly."
         ),
         assist_content.strip(),
+    ])
+
+
+def _kabosu_harness_mode_failure_context(reason: str) -> str:
+    clean_reason = str(reason or "unknown error").splitlines()[0][:240]
+    return "\n".join([
+        "[System-provided Kabosu harness-init mode]",
+        "The user explicitly mentioned harness-init, but Kabosu could not inspect the target repository.",
+        "Action:",
+        "- Do not install harness-init or edit implementation files yet.",
+        "- Explain that the harness-init setup check failed and ask for the target repo path or permission to retry.",
+        "- Do not quote local paths, command output, or raw internal errors in the Discord reply.",
+        f"- Internal diagnostic for routing only: {clean_reason}",
+    ])
+
+
+def _append_kabosu_harness_mode_context(message: str, harness_content: str) -> str:
+    return "\n\n".join([
+        message,
+        harness_content.strip(),
     ])
 
 
@@ -577,6 +651,65 @@ async def _build_kabosu_application_assist_context(
             request_link,
             "assist output did not include content",
         )
+    return content
+
+
+async def _build_kabosu_harness_mode_context(
+    message: Any,
+    source: Any,
+) -> Optional[str]:
+    if not _should_run_kabosu_harness_mode(message, source):
+        return None
+
+    repo_dir = _kabosu_harness_mode_repo_dir()
+    script = Path(os.environ.get(
+        "KABOSU_HARNESS_MODE_SCRIPT",
+        str(repo_dir / "scripts" / "kabosu-harness-mode.mjs"),
+    )).expanduser()
+    if not script.exists():
+        return _kabosu_harness_mode_failure_context(f"harness mode script not found: {script}")
+
+    cwd = _kabosu_harness_mode_cwd(repo_dir)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            _kabosu_harness_mode_node(),
+            str(script),
+            "--message",
+            str(message or ""),
+            "--cwd",
+            str(cwd),
+            "--json",
+            cwd=str(repo_dir),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env={**os.environ, "NO_COLOR": "1"},
+        )
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(),
+            timeout=_kabosu_harness_mode_timeout(),
+        )
+    except asyncio.TimeoutError:
+        return _kabosu_harness_mode_failure_context("Kabosu harness-init mode check timed out")
+    except Exception as exc:
+        return _kabosu_harness_mode_failure_context(str(exc))
+
+    out_text = stdout.decode("utf-8", errors="replace").strip()
+    err_text = stderr.decode("utf-8", errors="replace").strip()
+    if proc.returncode != 0:
+        return _kabosu_harness_mode_failure_context(
+            err_text or out_text or f"exit code {proc.returncode}",
+        )
+
+    try:
+        payload = json.loads(out_text)
+    except json.JSONDecodeError:
+        return _kabosu_harness_mode_failure_context("harness mode output was not JSON")
+    if not payload.get("enabled"):
+        return None
+
+    content = str(payload.get("content") or "").strip()
+    if not content:
+        return _kabosu_harness_mode_failure_context("harness mode output did not include content")
     return content
 
 
@@ -14545,6 +14678,18 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         This is run in a thread pool to not block the event loop.
         Supports interruption via new messages.
         """
+        kabosu_harness_context = await _build_kabosu_harness_mode_context(
+            message,
+            source,
+        )
+        if kabosu_harness_context:
+            if persist_user_message is None and isinstance(message, str):
+                persist_user_message = message
+            message = _append_kabosu_harness_mode_context(
+                str(message or ""),
+                kabosu_harness_context,
+            )
+
         kabosu_assist_context = await _build_kabosu_application_assist_context(
             message,
             source,
