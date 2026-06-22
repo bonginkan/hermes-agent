@@ -23,8 +23,10 @@ from hermes_cli.colors import Colors, color
 # the API gateway logs and report restart events").
 _GATEWAY_LIFECYCLE_PATTERNS = re.compile(
     r"(?i)"
-    r"(hermes\s+gateway\s+(restart|stop|start))"
-    r"|(launchctl\s+(kickstart|unload|load|stop|restart)\s+.*hermes)"
+    r"(hermes\s+gateway\s+(restart|stop|start|uninstall))"
+    r"|(hermes_cli(?:/|\.)main(?:\.py)?\s+gateway\s+(restart|stop|start|uninstall))"
+    r"|(main\.py\s+gateway\s+(restart|stop|start|uninstall))"
+    r"|(launchctl\s+(bootout|bootstrap|kickstart|kill|unload|load|stop|restart)\s+.*hermes)"
     r"|(systemctl\s+(-\S+\s+)*(restart|stop|start)\s+.*hermes)"
     r"|(p?kill\s+.*hermes.*gateway)"
 )

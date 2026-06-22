@@ -29,6 +29,9 @@ class TestGatewayLifecyclePattern:
         "hermes gateway restart",
         "hermes gateway stop",
         "hermes gateway start",
+        "hermes gateway uninstall",
+        "python3 -m hermes_cli.main gateway restart",
+        "/Users/me/hermes_cli/main.py gateway stop",
         "hermes  gateway  restart",         # double spaces
         "Hermez Gateway Restart".lower().replace("z", "s"),  # case handled
         "HERMES GATEWAY RESTART",           # uppercase
@@ -38,6 +41,9 @@ class TestGatewayLifecyclePattern:
 
     @pytest.mark.parametrize("text", [
         "launchctl kickstart gui/501/ai.hermes.gateway",
+        "launchctl kickstart -k gui/501/ai.hermes.gateway",
+        "/bin/launchctl bootout gui/501/ai.hermes.gateway",
+        "launchctl bootstrap gui/501 ~/Library/LaunchAgents/ai.hermes.gateway.plist",
         "launchctl unload ~/Library/LaunchAgents/ai.hermes.gateway.plist",
         "launchctl stop ai.hermes.gateway",
         "systemctl restart hermes-gateway",
@@ -213,6 +219,64 @@ class TestGatewaySelfTargetingGuard:
             gateway_command(args)
         assert exc_info.value.code == 1
 
+    def test_stop_refuses_when_active_agent_running_outside_gateway(self, monkeypatch, capsys):
+        monkeypatch.delenv("_HERMES_GATEWAY", raising=False)
+        import hermes_cli.gateway as gw
+
+        monkeypatch.setattr(gw, "_active_gateway_agent_count", lambda: 1)
+        args = Namespace(gateway_command="stop", all=False, system=False, force=False)
+        with pytest.raises(SystemExit) as exc_info:
+            gw.gateway_command(args)
+        assert exc_info.value.code == 1
+        assert "1 active agent" in capsys.readouterr().out
+
+    def test_restart_refuses_when_active_agent_running_outside_gateway(self, monkeypatch, capsys):
+        monkeypatch.delenv("_HERMES_GATEWAY", raising=False)
+        import hermes_cli.gateway as gw
+
+        monkeypatch.setattr(gw, "_active_gateway_agent_count", lambda: 2)
+        args = Namespace(gateway_command="restart", all=False, system=False, force=False)
+        with pytest.raises(SystemExit) as exc_info:
+            gw.gateway_command(args)
+        assert exc_info.value.code == 1
+        assert "2 active agents" in capsys.readouterr().out
+
+    def test_restart_force_bypasses_active_agent_guard(self, monkeypatch):
+        monkeypatch.delenv("_HERMES_GATEWAY", raising=False)
+        import hermes_cli.gateway as gw
+
+        class _Reached(Exception):
+            pass
+
+        def _sentinel(*a, **k):
+            raise _Reached()
+
+        monkeypatch.setattr(gw, "_active_gateway_agent_count", lambda: 1)
+        monkeypatch.setattr(gw, "_dispatch_via_service_manager_if_s6", _sentinel)
+        monkeypatch.setattr(gw, "_dispatch_all_via_service_manager_if_s6", _sentinel)
+        args = Namespace(gateway_command="restart", all=False, system=False, force=True)
+        with pytest.raises(_Reached):
+            gw.gateway_command(args)
+
+    def test_launchd_refresh_refuses_while_active(self, monkeypatch, tmp_path):
+        import hermes_cli.gateway as gw
+
+        plist = tmp_path / "ai.hermes.gateway.plist"
+        plist.write_text("old", encoding="utf-8")
+        monkeypatch.setattr(gw, "get_launchd_plist_path", lambda: plist)
+        monkeypatch.setattr(gw, "launchd_plist_is_current", lambda: False)
+        monkeypatch.setattr(gw, "_active_gateway_agent_count", lambda: 1)
+        monkeypatch.setattr(
+            gw.subprocess,
+            "run",
+            lambda *a, **k: (_ for _ in ()).throw(AssertionError("launchctl must not run")),
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            gw.refresh_launchd_plist_if_needed()
+        assert exc_info.value.code == 1
+        assert plist.read_text(encoding="utf-8") == "old"
+
     def test_stop_allows_outside_gateway(self, monkeypatch):
         # With the gateway marker unset, the self-targeting guard must NOT
         # fire. Prove control reaches the real stop path (rather than driving
@@ -220,6 +284,8 @@ class TestGatewaySelfTargetingGuard:
         # short-circuiting the first downstream call with a sentinel.
         monkeypatch.delenv("_HERMES_GATEWAY", raising=False)
         import hermes_cli.gateway as gw
+
+        monkeypatch.setattr(gw, "_active_gateway_agent_count", lambda: 0)
 
         class _Reached(Exception):
             pass
@@ -239,6 +305,8 @@ class TestGatewaySelfTargetingGuard:
         # dispatch check — sentinel it so we never reach real signal delivery.
         monkeypatch.delenv("_HERMES_GATEWAY", raising=False)
         import hermes_cli.gateway as gw
+
+        monkeypatch.setattr(gw, "_active_gateway_agent_count", lambda: 0)
 
         class _Reached(Exception):
             pass

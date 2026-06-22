@@ -102,6 +102,11 @@ def build_gateway_parser(
         action="store_true",
         help="Kill ALL stale gateway processes across all profiles before starting",
     )
+    gateway_start.add_argument(
+        "--force",
+        action="store_true",
+        help="Start/repair service even when active agent work is running",
+    )
     _add_compat_platform_flag(gateway_start)
 
     # gateway stop
@@ -115,6 +120,11 @@ def build_gateway_parser(
         "--all",
         action="store_true",
         help="Stop ALL gateway processes across all profiles",
+    )
+    gateway_stop.add_argument(
+        "--force",
+        action="store_true",
+        help="Stop even when active agent work is running",
     )
 
     # gateway restart
@@ -130,6 +140,11 @@ def build_gateway_parser(
         "--all",
         action="store_true",
         help="Kill ALL gateway processes across all profiles before restarting",
+    )
+    gateway_restart.add_argument(
+        "--force",
+        action="store_true",
+        help="Restart even when active agent work is running",
     )
     _add_compat_platform_flag(gateway_restart)
 
@@ -205,6 +220,11 @@ def build_gateway_parser(
         "--system",
         action="store_true",
         help="Target the Linux system-level gateway service",
+    )
+    gateway_uninstall.add_argument(
+        "--force",
+        action="store_true",
+        help="Uninstall even when active agent work is running",
     )
 
     # gateway list

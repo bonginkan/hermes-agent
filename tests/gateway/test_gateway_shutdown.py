@@ -54,7 +54,7 @@ async def test_gateway_stop_interrupts_running_agents_and_cancels_adapter_tasks(
     runner, adapter = make_restart_runner()
     runner._pending_messages = {"session": "pending text"}
     runner._pending_approvals = {"session": {"command": "rm -rf /tmp/x"}}
-    runner._restart_drain_timeout = 0.0
+    runner._restart_drain_timeout = 0.01
 
     release = asyncio.Event()
 
@@ -115,6 +115,30 @@ async def test_gateway_stop_drains_running_agents_before_disconnect():
 
 
 @pytest.mark.asyncio
+async def test_zero_restart_drain_timeout_waits_until_agents_finish():
+    runner, _adapter = make_restart_runner()
+    runner._update_runtime_status = MagicMock()
+
+    running_agent = MagicMock()
+    runner._running_agents = {"session": running_agent}
+
+    async def finish_agent():
+        await asyncio.sleep(0.05)
+        runner._running_agents.clear()
+
+    asyncio.create_task(finish_agent())
+
+    snapshot, timed_out = await asyncio.wait_for(
+        runner._drain_active_agents(0.0),
+        timeout=1.0,
+    )
+
+    assert snapshot == {"session": running_agent}
+    assert timed_out is False
+    running_agent.interrupt.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_gateway_stop_interrupts_after_drain_timeout():
     runner, adapter = make_restart_runner()
     runner._restart_drain_timeout = 0.05
@@ -141,7 +165,9 @@ async def test_gateway_stop_systemd_service_restart_exits_cleanly(tmp_path, monk
     monkeypatch.setenv("INVOCATION_ID", "systemd-test")
     runner._launch_systemd_restart_shortcut = MagicMock()
 
-    with patch("gateway.status.remove_pid_file"), patch("gateway.status.write_runtime_status"):
+    with patch("gateway.run.sys.platform", "linux"), patch(
+        "gateway.status.remove_pid_file"
+    ), patch("gateway.status.write_runtime_status"):
         await runner.stop(restart=True, service_restart=True)
 
     runner._launch_systemd_restart_shortcut.assert_called_once_with()

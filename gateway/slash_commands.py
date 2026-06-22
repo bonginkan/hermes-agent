@@ -44,6 +44,48 @@ from utils import (
 
 logger = logging.getLogger("gateway.run")
 
+_DEFAULT_DISCORD_SETTINGS_OWNER_IDS = {"1088738096725630997"}
+
+
+def _discord_settings_owner_ids() -> set[str]:
+    raw = (
+        os.environ.get("HERMES_DISCORD_SETTINGS_OWNER_IDS")
+        or os.environ.get("HERMES_DISCORD_OWNER_USER_IDS")
+        or ""
+    )
+    ids = {part.strip() for part in raw.split(",") if part.strip()}
+    return ids or set(_DEFAULT_DISCORD_SETTINGS_OWNER_IDS)
+
+
+def _discord_settings_change_denied(event: MessageEvent, setting_name: str) -> Optional[str]:
+    source = getattr(event, "source", None)
+    if getattr(source, "platform", None) != Platform.DISCORD:
+        return None
+    user_id = str(getattr(source, "user_id", "") or "").strip()
+    if user_id in _discord_settings_owner_ids():
+        return None
+    return (
+        f"この設定変更（{setting_name}）はオーナーのみ実行できます。\n"
+        f"許可されたDiscord user_id: {', '.join(sorted(_discord_settings_owner_ids()))}"
+    )
+
+
+def _is_codex_provider(provider: Any) -> bool:
+    return str(provider or "").strip().lower() == "openai-codex"
+
+
+def _codex_usage_unavailable_lines() -> list[str]:
+    return [
+        "📈 **Codex usage**",
+        "現在のCodex/ChatGPT残率は、Discord/Hermesからは直接確認できません。",
+        "",
+        "確認するには:",
+        "- Codex CLIのアクティブセッションでは `/status`",
+        "- Web/Appでは Codex Settings > Usage Dashboard",
+        "",
+        "公式値を直接確認できる場合だけ、枠ごとの残率として表示します。",
+    ]
+
 
 class GatewaySlashCommandsMixin:
     """In-session slash-command handlers for GatewayRunner."""
@@ -1071,6 +1113,10 @@ class GatewaySlashCommandsMixin:
             is_session,
         ) = parse_model_flags(raw_args)
         persist_global = resolve_persist_behavior(is_global_flag, is_session)
+        if persist_global and (model_input or explicit_provider or not raw_args):
+            denied = _discord_settings_change_denied(event, "/model")
+            if denied:
+                return denied
 
         # --refresh: bust the disk cache so the picker shows live data.
         if force_refresh:
@@ -1568,6 +1614,10 @@ class GatewaySlashCommandsMixin:
         new_value, errors = crs.parse_args(raw_args)
         if errors:
             return "❌ " + "\n❌ ".join(errors)
+        if new_value is not None:
+            denied = _discord_settings_change_denied(event, "/codex-runtime")
+            if denied:
+                return denied
 
         # Load + persist via the same helpers used for /model and /yolo
         try:
@@ -1624,6 +1674,10 @@ class GatewaySlashCommandsMixin:
                 lines.append(t("gateway.personality.item", name=name, preview=preview))
             lines.append(t("gateway.personality.usage"))
             return "\n".join(lines)
+
+        denied = _discord_settings_change_denied(event, "/personality")
+        if denied:
+            return denied
 
         def _resolve_prompt(value):
             if isinstance(value, dict):
@@ -1881,6 +1935,10 @@ class GatewaySlashCommandsMixin:
     async def _handle_set_home_command(self, event: MessageEvent) -> str:
         """Handle /sethome command -- set the current chat as the platform's home channel."""
         from gateway.run import _home_target_env_var, _home_thread_env_var
+        denied = _discord_settings_change_denied(event, "/sethome")
+        if denied:
+            return denied
+
         source = event.source
         platform_name = source.platform.value if source.platform else "unknown"
         chat_id = source.chat_id
@@ -2172,11 +2230,17 @@ class GatewaySlashCommandsMixin:
         # Display toggle (per-platform)
         platform_key = _platform_config_key(event.source.platform)
         if args in {"show", "on"}:
+            denied = _discord_settings_change_denied(event, "/reasoning show")
+            if denied:
+                return denied
             self._show_reasoning = True
             _save_config_key(f"display.platforms.{platform_key}.show_reasoning", True)
             return t("gateway.reasoning.display_set_on", platform=platform_key)
 
         if args in {"hide", "off"}:
+            denied = _discord_settings_change_denied(event, "/reasoning hide")
+            if denied:
+                return denied
             self._show_reasoning = False
             _save_config_key(f"display.platforms.{platform_key}.show_reasoning", False)
             return t("gateway.reasoning.display_set_off", platform=platform_key)
@@ -2202,6 +2266,9 @@ class GatewaySlashCommandsMixin:
 
         self._reasoning_config = parsed
         if persist_global:
+            denied = _discord_settings_change_denied(event, "/reasoning --global")
+            if denied:
+                return denied
             if _save_config_key("agent.reasoning_effort", effort):
                 self._set_session_reasoning_override(session_key, None)
                 self._evict_cached_agent(session_key)
@@ -2231,6 +2298,10 @@ class GatewaySlashCommandsMixin:
         args = raw_args.split() if raw_args else []
         session_key = self._session_key_for_source(event.source)
         config_path = _hermes_home / "config.yaml"
+        if args and args[0].lower() in {"approval", "mode"}:
+            denied = _discord_settings_change_denied(event, "/memory approval")
+            if denied:
+                return denied
 
         def _set_approval(enabled: bool):
             import yaml
@@ -2283,6 +2354,10 @@ class GatewaySlashCommandsMixin:
 
         gate_on = wa.write_approval_enabled(wa.SKILLS)
         wants_toggle = bool(args) and args[0].lower() in {"approval", "mode"}
+        if wants_toggle:
+            denied = _discord_settings_change_denied(event, "/skills approval")
+            if denied:
+                return denied
         if not gate_on and not wants_toggle and wa.pending_count(wa.SKILLS) == 0:
             return ("Skill write approval is off (skills.write_approval). "
                     "Enable it with /skills approval on, then review staged "
@@ -2357,6 +2432,10 @@ class GatewaySlashCommandsMixin:
             status = t("gateway.fast.status_fast") if self._service_tier == "priority" else t("gateway.fast.status_normal")
             return t("gateway.fast.status", mode=status)
 
+        denied = _discord_settings_change_denied(event, "/fast")
+        if denied:
+            return denied
+
         if args in {"fast", "on"}:
             self._service_tier = "priority"
             saved_value = "fast"
@@ -2399,6 +2478,9 @@ class GatewaySlashCommandsMixin:
         have its own verbosity level independently.
         """
         from gateway.run import _hermes_home, _load_gateway_config, _platform_config_key
+        denied = _discord_settings_change_denied(event, "/verbose")
+        if denied:
+            return denied
 
         config_path = _hermes_home / "config.yaml"
         platform_key = _platform_config_key(event.source.platform)
@@ -2500,6 +2582,10 @@ class GatewaySlashCommandsMixin:
                 fields=fields,
                 platform=platform_key,
             )
+
+        denied = _discord_settings_change_denied(event, "/footer")
+        if denied:
+            return denied
 
         if arg in {"on", "enable", "true", "1"}:
             new_state = True
@@ -3249,7 +3335,9 @@ class GatewaySlashCommandsMixin:
         # block the gateway. Failures are non-fatal -- account_lines stays [].
         account_lines: list[str] = []
         credits_lines: list[str] = []
-        if provider:
+        if _is_codex_provider(provider):
+            account_lines = _codex_usage_unavailable_lines()
+        elif provider:
             try:
                 account_snapshot = await asyncio.to_thread(
                     fetch_account_usage,

@@ -3523,7 +3523,7 @@ class DiscordAdapter(BasePlatformAdapter):
         async def slash_resume(interaction: discord.Interaction, name: str = ""):
             await self._run_simple_slash(interaction, f"/resume {name}".strip())
 
-        @tree.command(name="usage", description="Show token usage for this session")
+        @tree.command(name="usage", description="Show session usage and Codex usage guidance")
         async def slash_usage(interaction: discord.Interaction):
             await self._run_simple_slash(interaction, "/usage")
 

@@ -54,6 +54,7 @@ from typing import Dict, Optional, Any, List, Union
 from agent.account_usage import fetch_account_usage, render_account_usage_lines
 from agent.async_utils import safe_schedule_threadsafe
 from agent.i18n import t
+from gateway.change_audit import record_discord_audit_event
 from hermes_cli.config import cfg_get
 from hermes_cli.fallback_config import get_fallback_chain
 
@@ -133,6 +134,19 @@ _GATEWAY_SECRET_PATTERNS = (
     re.compile(r"\bhf_[A-Za-z0-9]{20,}\b"),
     re.compile(r"\bglpat-[A-Za-z0-9_\-]{20,}\b"),
     re.compile(r"(?i)\b(Bearer\s+)[A-Za-z0-9._\-]{20,}\b"),
+)
+
+_KABOSU_APPLICATION_ASSIST_TRIGGER_RE = re.compile(
+    r"(?:この|その)?(?:問い合わせ|問合せ|メール|投稿|メッセージ|連絡|依頼|件).{0,24}"
+    r"(?:対応|返信|回答|返答|返事|草案|案を作|処理)"
+    r"|(?:対応|返信|回答|返答|返事|草案|案を作|処理).{0,24}"
+    r"(?:この|その)?(?:問い合わせ|問合せ|メール|投稿|メッセージ|連絡|依頼|件)",
+    re.IGNORECASE,
+)
+_KABOSU_APPLICATION_ASSIST_AMBIGUOUS_TRIGGER_RE = re.compile(
+    r"(?:これ|それ|こちら|上記).{0,12}(?:対応|返信|回答|返答|返事|草案|案を作|処理)"
+    r"|(?:対応|返信|回答|返答|返事|草案|案を作|処理).{0,12}(?:これ|それ|こちら|上記)",
+    re.IGNORECASE,
 )
 
 
@@ -385,6 +399,185 @@ def _prepare_gateway_status_message(platform: Any, event_type: str, message: str
     if _looks_like_gateway_provider_error(text):
         return _gateway_provider_error_reply(text)
     return text
+
+
+def _kabosu_application_assist_enabled() -> bool:
+    return os.environ.get("KABOSU_APPLICATION_ASSIST_HOOK", "1").strip().lower() not in {
+        "0",
+        "false",
+        "off",
+        "no",
+    }
+
+
+def _kabosu_application_assist_mode(message: Any, source: Any) -> Optional[str]:
+    if not _kabosu_application_assist_enabled():
+        return None
+    if _gateway_platform_value(getattr(source, "platform", None)) != "discord":
+        return None
+    if not isinstance(message, str):
+        return None
+    if _KABOSU_APPLICATION_ASSIST_TRIGGER_RE.search(message):
+        return "explicit"
+    if _KABOSU_APPLICATION_ASSIST_AMBIGUOUS_TRIGGER_RE.search(message):
+        return "ambiguous"
+    return None
+
+
+def _should_run_kabosu_application_assist(message: Any, source: Any) -> bool:
+    return _kabosu_application_assist_mode(message, source) is not None
+
+
+def _kabosu_application_assist_repo_dir() -> Path:
+    configured = os.environ.get("KABOSU_APPLICATION_ASSIST_DIR")
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / "project" / "agent_kabosu_DiscordBot"
+
+
+def _kabosu_application_assist_node() -> str:
+    configured = os.environ.get("KABOSU_APPLICATION_ASSIST_NODE")
+    if configured:
+        return configured
+    local_node = Path.home() / ".local" / "bin" / "node"
+    return str(local_node) if local_node.exists() else "node"
+
+
+def _kabosu_application_assist_timeout() -> float:
+    try:
+        return max(1.0, float(os.environ.get("KABOSU_APPLICATION_ASSIST_TIMEOUT", "120")))
+    except (TypeError, ValueError):
+        return 120.0
+
+
+def _discord_message_link_from_source(source: Any, event_message_id: Optional[str]) -> Optional[str]:
+    guild_id = (
+        getattr(source, "guild_id", None)
+        or os.environ.get("AGENT_DOCOPS_SERVER_ID")
+        or os.environ.get("KABOSU_DOCOPS_SERVER_ID")
+    )
+    channel_id = getattr(source, "chat_id", None)
+    message_id = event_message_id or getattr(source, "message_id", None)
+    if not guild_id or not channel_id or not message_id:
+        return None
+    return f"https://discord.com/channels/{guild_id}/{channel_id}/{message_id}"
+
+
+def _kabosu_application_assist_failure_context(request_link: Optional[str], reason: str) -> str:
+    link = request_link or "(current Discord message link unavailable)"
+    clean_reason = str(reason or "unknown error").splitlines()[0][:240]
+    return "\n".join([
+        "この問い合わせに対する提案です:",
+        link,
+        "",
+        "不足情報:",
+        "- 対象の問い合わせ投稿を、リプライまたはDiscordメッセージリンクで指定してください",
+        "",
+        "今の知識では、この回答案は作れません。ごめんなさい。",
+        "",
+        "理由:",
+        f"- Kabosu問い合わせ回答アシストを実行できませんでした: {clean_reason}",
+    ])
+
+
+def _append_kabosu_application_assist_context(message: str, assist_content: str) -> str:
+    return "\n\n".join([
+        message,
+        "[System-provided Kabosu inquiry assist result]",
+        (
+            "The user asked Kabosu to handle an inquiry or email. Include the draft/result below "
+            "inside your normal reply. Do not mention internal commands or polling. If the result "
+            "says it cannot draft, explain the missing information clearly."
+        ),
+        assist_content.strip(),
+    ])
+
+
+async def _build_kabosu_application_assist_context(
+    message: Any,
+    source: Any,
+    event_message_id: Optional[str],
+) -> Optional[str]:
+    assist_mode = _kabosu_application_assist_mode(message, source)
+    if assist_mode is None:
+        return None
+
+    request_link = _discord_message_link_from_source(source, event_message_id)
+    if not request_link:
+        return _kabosu_application_assist_failure_context(
+            None,
+            "Discordメッセージリンクを組み立てられませんでした",
+        )
+
+    repo_dir = _kabosu_application_assist_repo_dir()
+    script = Path(os.environ.get(
+        "KABOSU_APPLICATION_ASSIST_SCRIPT",
+        str(repo_dir / "scripts" / "kabosu-application-assist-cli.mjs"),
+    )).expanduser()
+    if not script.exists():
+        return _kabosu_application_assist_failure_context(
+            request_link,
+            f"assist script not found: {script}",
+        )
+
+    try:
+        command = [
+            _kabosu_application_assist_node(),
+            str(script),
+            "--request-message-link",
+            request_link,
+            "--json",
+        ]
+        if assist_mode == "ambiguous":
+            command.append("--require-assist-context")
+        proc = await asyncio.create_subprocess_exec(
+            *command,
+            cwd=str(repo_dir),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env={**os.environ, "NO_COLOR": "1"},
+        )
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(),
+            timeout=_kabosu_application_assist_timeout(),
+        )
+    except asyncio.TimeoutError:
+        return _kabosu_application_assist_failure_context(
+            request_link,
+            "Kabosu問い合わせ回答アシストがタイムアウトしました",
+        )
+    except Exception as exc:
+        return _kabosu_application_assist_failure_context(request_link, str(exc))
+
+    out_text = stdout.decode("utf-8", errors="replace").strip()
+    err_text = stderr.decode("utf-8", errors="replace").strip()
+    if proc.returncode != 0:
+        return _kabosu_application_assist_failure_context(
+            request_link,
+            err_text or out_text or f"exit code {proc.returncode}",
+        )
+
+    try:
+        payload = json.loads(out_text)
+    except json.JSONDecodeError:
+        return _kabosu_application_assist_failure_context(
+            request_link,
+            "assist output was not JSON",
+        )
+    if payload.get("skipped"):
+        logger.info(
+            "Kabosu application assist skipped ambiguous request: %s",
+            payload.get("reason") or "target not classified as assist context",
+        )
+        return None
+
+    content = str(payload.get("content") or "").strip()
+    if not content:
+        return _kabosu_application_assist_failure_context(
+            request_link,
+            "assist output did not include content",
+        )
+    return content
 
 
 def render_notice_line(notice) -> str:
@@ -1667,6 +1860,38 @@ from gateway.whatsapp_identity import (
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_DISCORD_SETTINGS_OWNER_IDS = {"1088738096725630997"}
+_DISCORD_RUNTIME_SETTINGS_REQUEST_RE = re.compile(
+    r"("
+    r"(?:~|/Users/[^\s]+)?/\.hermes/(?:config\.yaml|SOUL\.md)\b"
+    r"|\bhermes\s+config\s+set\b"
+    r"|(?:Hermes|カボス|Kabosu).{0,24}(?:runtime|運用|本体).{0,24}(?:設定|config).{0,24}(?:変|変更|更新|書|直|set|update)"
+    r"|(?:Hermes|カボス|Kabosu).{0,24}(?:SOUL|人格|personality).{0,24}(?:変|変更|更新|書|直|set|update)"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _discord_settings_owner_ids() -> set[str]:
+    raw = (
+        os.environ.get("HERMES_DISCORD_SETTINGS_OWNER_IDS")
+        or os.environ.get("HERMES_DISCORD_OWNER_USER_IDS")
+        or ""
+    )
+    ids = {part.strip() for part in raw.split(",") if part.strip()}
+    return ids or set(_DEFAULT_DISCORD_SETTINGS_OWNER_IDS)
+
+
+def _is_discord_settings_owner_source(source: Any) -> bool:
+    user_id = str(getattr(source, "user_id", "") or "").strip()
+    return bool(user_id and user_id in _discord_settings_owner_ids())
+
+
+def _looks_like_discord_runtime_settings_request(text: str) -> bool:
+    raw = (text or "").strip()
+    if not raw or raw.startswith("/"):
+        return False
+    return bool(_DISCORD_RUNTIME_SETTINGS_REQUEST_RE.search(raw))
 
 # Sentinel placed into _running_agents immediately when a session starts
 # processing, *before* any await.  Prevents a second message for the same
@@ -4404,14 +4629,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             return snapshot, False
 
         _maybe_update_status(force=True)
-        if timeout <= 0:
-            return snapshot, True
-
-        deadline = asyncio.get_running_loop().time() + timeout
-        while self._running_agents and asyncio.get_running_loop().time() < deadline:
+        deadline = None if timeout <= 0 else asyncio.get_running_loop().time() + timeout
+        while self._running_agents and (
+            deadline is None or asyncio.get_running_loop().time() < deadline
+        ):
             _maybe_update_status()
             await asyncio.sleep(0.1)
-        timed_out = bool(self._running_agents)
+        timed_out = bool(self._running_agents) and deadline is not None
         _maybe_update_status(force=True)
         return snapshot, timed_out
 
@@ -7325,6 +7549,23 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     # Record rate limit so subsequent messages are silently ignored
                     self.pairing_store._record_rate_limit(platform_name, source.user_id)
             return None
+
+        if (
+            not is_internal
+            and source.platform == Platform.DISCORD
+            and not _is_discord_settings_owner_source(source)
+            and _looks_like_discord_runtime_settings_request(event.text or "")
+        ):
+            logger.info(
+                "Blocked explicit Discord runtime settings request from non-owner user_id=%s chat=%s",
+                source.user_id or "unknown",
+                source.chat_id or "unknown",
+            )
+            await self._deliver_platform_notice(
+                source,
+                "Hermes/Kabosu本体のruntime設定変更はオーナーのみ実行できます。",
+            )
+            return None
         
         # Intercept messages that are responses to a pending /update prompt.
         # The update process (detached) wrote .update_prompt.json; the watcher
@@ -8409,6 +8650,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         self._running_agents[_quick_key] = _AGENT_PENDING_SENTINEL
         self._running_agents_ts[_quick_key] = time.time()
         _run_generation = self._begin_session_run_generation(_quick_key)
+        self._update_runtime_status("running")
 
         try:
             _agent_result = await self._handle_message_with_agent(event, source, _quick_key, _run_generation)
@@ -8777,10 +9019,20 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         _reply_id = getattr(event, "reply_to_message_id", None)
         _reply_txt = (getattr(event, "reply_to_text", None) or "")[:80].replace("\n", " ")
         logger.info(
-            "inbound message: platform=%s user=%s chat=%s msg=%r reply_to_id=%s reply_to_text=%r",
+            "inbound message: platform=%s user=%s user_id=%s chat=%s msg=%r reply_to_id=%s reply_to_text=%r",
             _platform_name, source.user_name or source.user_id or "unknown",
+            source.user_id or "unknown",
             source.chat_id or "unknown", _msg_preview, _reply_id, _reply_txt,
         )
+        try:
+            record_discord_audit_event(
+                hermes_home=_hermes_home,
+                event=event,
+                message_preview=_msg_preview,
+                reply_to_text=_reply_txt,
+            )
+        except Exception:
+            logger.debug("Failed to record Discord change-audit event", exc_info=True)
 
         # Get or create session
         # Topic-mode DMs: rewrite a stale/foreign thread_id to the user's
@@ -13480,6 +13732,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         self._running_agents_ts.pop(session_key, None)
         if hasattr(self, "_busy_ack_ts"):
             self._busy_ack_ts.pop(session_key, None)
+        if getattr(self, "_draining", False):
+            self._update_runtime_status("draining")
+        elif getattr(self, "_running", False):
+            self._update_runtime_status("running")
         return True
 
     def _clear_session_boundary_security_state(self, session_key: str) -> None:
@@ -14289,6 +14545,19 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         This is run in a thread pool to not block the event loop.
         Supports interruption via new messages.
         """
+        kabosu_assist_context = await _build_kabosu_application_assist_context(
+            message,
+            source,
+            event_message_id,
+        )
+        if kabosu_assist_context:
+            if persist_user_message is None and isinstance(message, str):
+                persist_user_message = message
+            message = _append_kabosu_application_assist_context(
+                str(message or ""),
+                kabosu_assist_context,
+            )
+
         # ---- Proxy mode: delegate to remote API server ----
         if self._get_proxy_url():
             return await self._run_agent_via_proxy(

@@ -2774,6 +2774,51 @@ def _get_restart_drain_timeout() -> float:
     return parse_restart_drain_timeout(raw)
 
 
+def _active_gateway_agent_count() -> int:
+    """Return the live gateway's active-agent count from runtime status."""
+    try:
+        from gateway.status import (
+            get_running_pid,
+            get_runtime_status_running_pid,
+            read_runtime_status,
+        )
+
+        runtime = read_runtime_status() or {}
+        runtime_pid = get_runtime_status_running_pid(runtime)
+        running_pid = get_running_pid(cleanup_stale=False)
+        if runtime_pid is None and running_pid is None:
+            return 0
+        if runtime_pid is not None and running_pid is not None and runtime_pid != running_pid:
+            return 0
+        return max(0, int(runtime.get("active_agents") or 0))
+    except Exception:
+        logger.debug("Could not read active gateway agent count", exc_info=True)
+        return 0
+
+
+def _refuse_gateway_lifecycle_if_active(action: str, *, force: bool = False) -> None:
+    """Refuse service lifecycle commands that would interrupt active work."""
+    if force:
+        return
+    count = _active_gateway_agent_count()
+    if count <= 0:
+        return
+    noun = "agent" if count == 1 else "agents"
+    print_error(
+        f"Refusing to {action} the gateway: {count} active {noun} still running."
+    )
+    print(
+        "  This would interrupt the current task. Let the task finish, use /stop "
+        "if you intentionally want to cancel it, or re-run with --force."
+    )
+    sys.exit(1)
+
+
+def _restart_wait_timeout(drain_timeout: float) -> float:
+    """Bound CLI waits; runtime drain may be unlimited, but CLI should not hang forever."""
+    return (drain_timeout + 5.0) if drain_timeout > 0 else (DEFAULT_GATEWAY_RESTART_DRAIN_TIMEOUT + 5.0)
+
+
 def systemd_install(
     force: bool = False,
     system: bool = False,
@@ -2894,7 +2939,8 @@ def systemd_start(system: bool = False):
     print(f"✓ {_service_scope_label(system).capitalize()} service started")
 
 
-def systemd_stop(system: bool = False):
+def systemd_stop(system: bool = False, *, force: bool = False):
+    _refuse_gateway_lifecycle_if_active("stop", force=force)
     system = _select_systemd_scope(system)
     if system:
         _require_root_for_system_service("stop")
@@ -2922,7 +2968,8 @@ def systemd_stop(system: bool = False):
     print(f"✓ {_service_scope_label(system).capitalize()} service stopped")
 
 
-def systemd_restart(system: bool = False):
+def systemd_restart(system: bool = False, *, force: bool = False):
+    _refuse_gateway_lifecycle_if_active("restart", force=force)
     system = _select_systemd_scope(system)
     if system:
         _require_root_for_system_service("restart")
@@ -2939,8 +2986,9 @@ def systemd_restart(system: bool = False):
         svc = get_service_name()
         drain_timeout = _get_restart_drain_timeout()
 
+        wait_timeout = _restart_wait_timeout(drain_timeout)
         print(f"⏳ {scope_label} service restarting gracefully (PID {pid})...")
-        if _graceful_restart_via_sigusr1(pid, drain_timeout + 5):
+        if _graceful_restart_via_sigusr1(pid, wait_timeout):
             # The gateway exits with code 75 for a planned service restart.
             # RestartSec can otherwise delay the relaunch even though the
             # operator asked for an immediate restart, so kick the unit once
@@ -2963,7 +3011,7 @@ def systemd_restart(system: bool = False):
                 return
 
         print(
-            f"⚠ Graceful restart did not complete within {int(drain_timeout + 5)}s; "
+            f"⚠ Graceful restart did not complete within {int(wait_timeout)}s; "
             "forcing a service restart..."
         )
         _run_systemctl(
@@ -3437,7 +3485,7 @@ def launchd_plist_is_current() -> bool:
     ) == _normalize_launchd_plist_for_comparison(expected)
 
 
-def refresh_launchd_plist_if_needed() -> bool:
+def refresh_launchd_plist_if_needed(*, force: bool = False) -> bool:
     """Rewrite the installed launchd plist when the generated definition has changed.
 
     Unlike systemd, launchd picks up plist changes on the next ``launchctl kill``/
@@ -3447,6 +3495,7 @@ def refresh_launchd_plist_if_needed() -> bool:
     plist_path = get_launchd_plist_path()
     if not plist_path.exists() or launchd_plist_is_current():
         return False
+    _refuse_gateway_lifecycle_if_active("refresh launchd service", force=force)
 
     new_plist = generate_launchd_plist()
     if _refuse_temp_home_service_write(new_plist, "launchd plist"):
@@ -3522,8 +3571,9 @@ def launchd_install(force: bool = False):
 
     if plist_path.exists() and not force:
         if not launchd_plist_is_current():
+            _refuse_gateway_lifecycle_if_active("repair launchd service", force=force)
             print(f"↻ Repairing outdated launchd service at: {plist_path}")
-            refresh_launchd_plist_if_needed()
+            refresh_launchd_plist_if_needed(force=force)
             print("✓ Service definition updated")
             return
         print(f"Service already installed at: {plist_path}")
@@ -3559,7 +3609,8 @@ def launchd_install(force: bool = False):
     print(f"  tail -f {_dhh()}/logs/gateway.log  # View logs")
 
 
-def launchd_uninstall():
+def launchd_uninstall(*, force: bool = False):
+    _refuse_gateway_lifecycle_if_active("uninstall", force=force)
     plist_path = get_launchd_plist_path()
     label = get_launchd_label()
     subprocess.run(
@@ -3575,7 +3626,7 @@ def launchd_uninstall():
     print("✓ Service uninstalled")
 
 
-def launchd_start():
+def launchd_start(*, force: bool = False):
     plist_path = get_launchd_plist_path()
     label = get_launchd_label()
 
@@ -3606,7 +3657,7 @@ def launchd_start():
         print("✓ Service started")
         return
 
-    refresh_launchd_plist_if_needed()
+    refresh_launchd_plist_if_needed(force=force)
     try:
         subprocess.run(
             ["launchctl", "kickstart", f"{_launchd_domain()}/{label}"],
@@ -3639,7 +3690,8 @@ def launchd_start():
     print("✓ Service started")
 
 
-def launchd_stop():
+def launchd_stop(*, force: bool = False):
+    _refuse_gateway_lifecycle_if_active("stop", force=force)
     label = get_launchd_label()
     target = f"{_launchd_domain()}/{label}"
     try:
@@ -3722,10 +3774,12 @@ def _wait_for_gateway_exit(
     return True
 
 
-def launchd_restart():
+def launchd_restart(*, force: bool = False):
+    _refuse_gateway_lifecycle_if_active("restart", force=force)
     label = get_launchd_label()
     target = f"{_launchd_domain()}/{label}"
     drain_timeout = _get_restart_drain_timeout()
+    wait_timeout = _restart_wait_timeout(drain_timeout)
     from gateway.status import get_running_pid
 
     try:
@@ -3739,10 +3793,10 @@ def launchd_restart():
             except (ProcessLookupError, PermissionError, OSError):
                 pid = None
             if pid is not None:
-                exited = _wait_for_gateway_exit(timeout=drain_timeout, force_after=None)
+                exited = _wait_for_gateway_exit(timeout=wait_timeout, force_after=None)
                 if not exited:
                     print(
-                        f"⚠ Gateway drain timed out after {drain_timeout:.0f}s — forcing launchd restart"
+                        f"⚠ Gateway drain did not finish within {wait_timeout:.0f}s — forcing launchd restart"
                     )
         subprocess.run(["launchctl", "kickstart", "-k", target], check=True, timeout=90)
         print("✓ Service restarted")
@@ -6699,16 +6753,18 @@ def _gateway_command_inner(args):
             managed_error("uninstall gateway service (managed by NixOS)")
             return
         system = getattr(args, "system", False)
+        force = getattr(args, "force", False)
         if is_termux():
             print(
                 "Gateway service uninstall is not supported on Termux because there is no managed service to remove."
             )
             print("Stop manual runs with: hermes gateway stop")
             sys.exit(1)
+        _refuse_gateway_lifecycle_if_active("uninstall", force=force)
         if supports_systemd_services():
             systemd_uninstall(system=system)
         elif is_macos():
-            launchd_uninstall()
+            launchd_uninstall(force=force)
         elif is_windows():
             from hermes_cli import gateway_windows
 
@@ -6734,6 +6790,7 @@ def _gateway_command_inner(args):
     elif subcmd == "start":
         system = getattr(args, "system", False)
         start_all = getattr(args, "all", False)
+        force = getattr(args, "force", False)
 
         # Phase 4: inside a container with s6, dispatch via the service
         # manager instead of falling through to systemd/launchd/windows.
@@ -6744,6 +6801,7 @@ def _gateway_command_inner(args):
             return
 
         if start_all:
+            _refuse_gateway_lifecycle_if_active("start --all", force=force)
             # Kill all stale gateway processes across all profiles before starting
             killed = kill_gateway_processes(all_profiles=True)
             if killed:
@@ -6761,7 +6819,7 @@ def _gateway_command_inner(args):
         if supports_systemd_services():
             systemd_start(system=system)
         elif is_macos():
-            launchd_start()
+            launchd_start(force=force)
         elif is_windows():
             from hermes_cli import gateway_windows
 
@@ -6815,6 +6873,8 @@ def _gateway_command_inner(args):
 
         stop_all = getattr(args, "all", False)
         system = getattr(args, "system", False)
+        force = getattr(args, "force", False)
+        _refuse_gateway_lifecycle_if_active("stop", force=force)
 
         # Phase 4: inside a container with s6, dispatch via the service
         # manager. ``--all`` iterates every registered profile gateway
@@ -6833,13 +6893,13 @@ def _gateway_command_inner(args):
                 or get_systemd_unit_path(system=True).exists()
             ):
                 try:
-                    systemd_stop(system=system)
+                    systemd_stop(system=system, force=force)
                     service_available = True
                 except subprocess.CalledProcessError:
                     pass
             elif is_macos() and get_launchd_plist_path().exists():
                 try:
-                    launchd_stop()
+                    launchd_stop(force=force)
                     service_available = True
                 except subprocess.CalledProcessError:
                     pass
@@ -6866,13 +6926,13 @@ def _gateway_command_inner(args):
                 or get_systemd_unit_path(system=True).exists()
             ):
                 try:
-                    systemd_stop(system=system)
+                    systemd_stop(system=system, force=force)
                     service_available = True
                 except subprocess.CalledProcessError:
                     pass
             elif is_macos() and get_launchd_plist_path().exists():
                 try:
-                    launchd_stop()
+                    launchd_stop(force=force)
                     service_available = True
                 except subprocess.CalledProcessError:
                     pass
@@ -6910,7 +6970,9 @@ def _gateway_command_inner(args):
         service_available = False
         system = getattr(args, "system", False)
         restart_all = getattr(args, "all", False)
+        force = getattr(args, "force", False)
         service_configured = False
+        _refuse_gateway_lifecycle_if_active("restart", force=force)
 
         # Phase 4: inside a container with s6, dispatch via the service
         # manager (s6-svc -t restarts the supervised process). ``--all``
@@ -6930,13 +6992,13 @@ def _gateway_command_inner(args):
                 or get_systemd_unit_path(system=True).exists()
             ):
                 try:
-                    systemd_stop(system=system)
+                    systemd_stop(system=system, force=force)
                     service_stopped = True
                 except subprocess.CalledProcessError:
                     pass
             elif is_macos() and get_launchd_plist_path().exists():
                 try:
-                    launchd_stop()
+                    launchd_stop(force=force)
                     service_stopped = True
                 except subprocess.CalledProcessError:
                     pass
@@ -6963,7 +7025,7 @@ def _gateway_command_inner(args):
             ):
                 systemd_start(system=system)
             elif is_macos() and get_launchd_plist_path().exists():
-                launchd_start()
+                launchd_start(force=force)
             elif is_windows():
                 from hermes_cli import gateway_windows
 
@@ -6984,14 +7046,14 @@ def _gateway_command_inner(args):
         ):
             service_configured = True
             try:
-                systemd_restart(system=system)
+                systemd_restart(system=system, force=force)
                 service_available = True
             except subprocess.CalledProcessError:
                 pass
         elif is_macos() and get_launchd_plist_path().exists():
             service_configured = True
             try:
-                launchd_restart()
+                launchd_restart(force=force)
                 service_available = True
             except subprocess.CalledProcessError:
                 pass
