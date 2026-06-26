@@ -1,11 +1,13 @@
 """Tests for gateway session management."""
 import json
 import pytest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 from gateway.config import Platform, HomeChannel, GatewayConfig, PlatformConfig
 from gateway.platforms.base import MessageEvent
 from gateway.session import (
+    SessionEntry,
     SessionSource,
     SessionStore,
     build_session_context,
@@ -609,6 +611,44 @@ class TestSessionStoreSwitchSession:
         assert resumed["ended_at"] is None
         assert resumed["end_reason"] is None
         db.close()
+
+
+class TestSessionStoreRedirectSession:
+    """Canonical redirects must not apply /resume DB semantics."""
+
+    def test_redirect_session_updates_mapping_without_reopening_db_rows(self, tmp_path):
+        config = GatewayConfig()
+        with patch("gateway.session.SessionStore._ensure_loaded"):
+            store = SessionStore(sessions_dir=tmp_path / "sessions", config=config)
+        store._loaded = True
+        store._db = MagicMock()
+        store._save = MagicMock()
+
+        created_at = datetime.now()
+        entry = SessionEntry(
+            session_key="k1",
+            session_id="compressed-parent",
+            created_at=created_at,
+            updated_at=created_at,
+            platform=Platform.DISCORD,
+            chat_type="group",
+            last_prompt_tokens=350000,
+            input_tokens=123,
+            output_tokens=456,
+            total_tokens=579,
+        )
+        store._entries = {"k1": entry}
+
+        redirected = store.redirect_session("k1", "compressed-tip")
+
+        assert redirected is entry
+        assert redirected.session_id == "compressed-tip"
+        assert redirected.created_at == created_at
+        assert redirected.last_prompt_tokens == 0
+        assert redirected.total_tokens == 0
+        store._db.end_session.assert_not_called()
+        store._db.reopen_session.assert_not_called()
+        store._save.assert_called_once()
 
 
 class TestSessionStoreLookupBySessionId:

@@ -936,6 +936,111 @@ class TestInit:
 
         assert a.max_tokens == 8192
 
+    def test_codex_native_first_skips_threshold_autoraise_and_keeps_overflow_fallback(self):
+        """Codex quality path is native compaction first; Hermes is overflow fallback only."""
+        with (
+            patch("run_agent.get_tool_definitions", return_value=[]),
+            patch("run_agent.check_toolset_requirements", return_value={}),
+            patch("run_agent.OpenAI"),
+            patch(
+                "hermes_cli.config.load_config",
+                return_value={
+                    "compression": {
+                        "enabled": True,
+                        "threshold": 0.50,
+                        "codex_native_first": True,
+                        "codex_gpt55_autoraise": True,
+                        "overflow_fallback_max_attempts": "auto",
+                    }
+                },
+            ),
+        ):
+            a = AIAgent(
+                api_key="test-k...7890",
+                provider="openai-codex",
+                model="gpt-5.5",
+                base_url="https://chatgpt.com/backend-api/codex",
+                api_mode="codex_responses",
+                quiet_mode=True,
+                skip_context_files=True,
+                skip_memory=True,
+            )
+
+        assert getattr(a, "_codex_native_compaction_first") is True
+        assert getattr(a, "_compression_threshold_autoraised") is None
+        assert getattr(a, "_compression_overflow_fallback_max_attempts") == 1
+        assert getattr(a, "context_compressor").threshold_percent == 0.50
+
+    def test_codex_native_first_limits_fallback_even_when_proactive_compression_disabled(self):
+        """compression.enabled does not turn the Codex overflow safety valve into an unlimited loop."""
+        with (
+            patch("run_agent.get_tool_definitions", return_value=[]),
+            patch("run_agent.check_toolset_requirements", return_value={}),
+            patch("run_agent.OpenAI"),
+            patch(
+                "hermes_cli.config.load_config",
+                return_value={
+                    "compression": {
+                        "enabled": False,
+                        "threshold": 0.50,
+                        "codex_native_first": True,
+                        "codex_gpt55_autoraise": True,
+                        "overflow_fallback_max_attempts": "auto",
+                    }
+                },
+            ),
+        ):
+            a = AIAgent(
+                api_key="test-k...7890",
+                provider="openai-codex",
+                model="gpt-5.5",
+                base_url="https://chatgpt.com/backend-api/codex",
+                api_mode="codex_responses",
+                quiet_mode=True,
+                skip_context_files=True,
+                skip_memory=True,
+            )
+
+        assert a.compression_enabled is False
+        assert getattr(a, "_codex_native_compaction_first") is True
+        assert getattr(a, "_compression_threshold_autoraised") is None
+        assert getattr(a, "_compression_overflow_fallback_max_attempts") == 1
+
+    def test_codex_legacy_threshold_mode_can_still_opt_into_autoraise(self):
+        """codex_gpt55_autoraise remains available when codex_native_first is disabled."""
+        with (
+            patch("run_agent.get_tool_definitions", return_value=[]),
+            patch("run_agent.check_toolset_requirements", return_value={}),
+            patch("run_agent.OpenAI"),
+            patch(
+                "hermes_cli.config.load_config",
+                return_value={
+                    "compression": {
+                        "enabled": True,
+                        "threshold": 0.50,
+                        "codex_native_first": False,
+                        "codex_gpt55_autoraise": True,
+                        "overflow_fallback_max_attempts": "auto",
+                    }
+                },
+            ),
+        ):
+            a = AIAgent(
+                api_key="test-k...7890",
+                provider="openai-codex",
+                model="gpt-5.5",
+                base_url="https://chatgpt.com/backend-api/codex",
+                api_mode="codex_responses",
+                quiet_mode=True,
+                skip_context_files=True,
+                skip_memory=True,
+            )
+
+        assert getattr(a, "_codex_native_compaction_first") is False
+        assert getattr(a, "_compression_threshold_autoraised") == {"from": 0.50, "to": 0.85}
+        assert getattr(a, "_compression_overflow_fallback_max_attempts") == 10**9
+        assert getattr(a, "context_compressor").threshold_percent == 0.85
+
     def test_prompt_caching_cache_ttl_invalid_falls_back(self):
         """Non-Anthropic TTL values keep default 5m without raising."""
         with (

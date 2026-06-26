@@ -3,7 +3,8 @@
 Verifies that:
 - HTTP 413 errors trigger history compression and retry
 - HTTP 400 context-length errors trigger compression (not generic 4xx abort)
-- Preflight compression proactively compresses oversized sessions before API calls
+- Preflight/post-tool proactive compression stays disabled; provider hard
+  overflows remain the compression safety valve
 """
 
 import pytest
@@ -117,6 +118,7 @@ def test_current_user_turn_is_persisted_before_provider_call(agent):
 
     def _provider_crash(*_args, **_kwargs):
         observed.append(("provider", [], []))
+        agent.interrupt("stop after persistence check")
         raise RuntimeError("provider died after turn-start persistence")
 
     agent.client.chat.completions.create.side_effect = _provider_crash
@@ -131,7 +133,7 @@ def test_current_user_turn_is_persisted_before_provider_call(agent):
             conversation_history=[{"role": "user", "content": "old message"}],
         )
 
-    assert result.get("failed") is True
+    assert result.get("interrupted") is True
     assert observed[0][0] == "persist"
     assert observed[1][0] == "provider"
     persisted_messages = observed[0][1]
@@ -173,6 +175,33 @@ class TestHTTP413Compression:
         mock_compress.assert_called_once()
         assert result["completed"] is True
         assert result["final_response"] == "Success after compression"
+
+    def test_413_overflow_fallback_stops_after_configured_attempt_limit(self, agent):
+        """Codex native-first fallback should not loop through repeated Hermes compactions."""
+        agent._compression_overflow_fallback_max_attempts = 1
+        err_413_first = _make_413_error()
+        err_413_second = _make_413_error()
+        agent.client.chat.completions.create.side_effect = [err_413_first, err_413_second]
+
+        with (
+            patch.object(agent, "_compress_context") as mock_compress,
+            patch.object(agent, "_persist_session"),
+            patch.object(agent, "_save_trajectory"),
+            patch.object(agent, "_cleanup_task_resources"),
+        ):
+            mock_compress.return_value = (
+                [{"role": "user", "content": "hello"}],
+                "compressed system prompt",
+            )
+            result = agent.run_conversation("hello", conversation_history=[
+                {"role": "user", "content": "previous"},
+                {"role": "assistant", "content": "answer"},
+            ])
+
+        mock_compress.assert_called_once()
+        assert result["failed"] is True
+        assert result["compression_exhausted"] is True
+        assert "max compression attempts (1)" in result["error"]
 
     def test_413_not_treated_as_generic_4xx(self, agent):
         """413 must NOT hit the generic 4xx abort path; it should attempt compression."""
@@ -441,8 +470,8 @@ class TestHTTP413Compression:
         assert "413" in result["error"]
 
 
-class TestPreflightCompression:
-    """Preflight compression should compress history before the first API call."""
+class TestPreflightCompressionDisabled:
+    """Preflight compression should not interrupt turns before the provider call."""
 
     def test_compress_context_emits_lifecycle_status_before_work(self, agent):
         """Direct context compression should tell gateway users why the turn paused."""
@@ -477,16 +506,16 @@ class TestPreflightCompression:
         assert "Compacting context" in events[0][1]
         assert events[1] == ("compress", "started")
 
-    def test_preflight_compresses_oversized_history(self, agent):
-        """When loaded history exceeds the model's context threshold, compress before API call."""
+    def test_preflight_does_not_compress_oversized_history(self, agent):
+        """Oversized loaded history is sent through; provider overflow handles fallback."""
         agent.compression_enabled = True
         # Set a small context so the history is "oversized", but large enough
         # that the compressed result (2 short messages) fits in a single pass.
         agent.context_compressor.context_length = 2000
         agent.context_compressor.threshold_tokens = 200
 
-        # Build a history that will be large enough to trigger preflight
-        # (each message ~50 chars ≈ 13 tokens, 40 messages ≈ 520 tokens > 200 threshold)
+        # Build a history that would have triggered the removed preflight path
+        # (each message ~50 chars ≈ 13 tokens, 40 messages ≈ 520 tokens > 200 threshold).
         big_history = []
         for i in range(20):
             big_history.append({"role": "user", "content": f"Message number {i} with some extra text padding"})
@@ -513,24 +542,16 @@ class TestPreflightCompression:
             )
             result = agent.run_conversation("hello", conversation_history=big_history)
 
-        # Preflight compression is a multi-pass loop (up to 3 passes for very
-        # large sessions, breaking when no further reduction is possible).
-        # First pass must have received the full oversized history.
-        assert mock_compress.call_count >= 1, "Preflight compression never ran"
-        first_call_messages = mock_compress.call_args_list[0].args[0]
-        assert len(first_call_messages) >= 40, (
-            f"First preflight pass should see the full history, got "
-            f"{len(first_call_messages)} messages"
-        )
+        mock_compress.assert_not_called()
         assert result["completed"] is True
         assert result["final_response"] == "After preflight"
-        assert any(
+        assert not any(
             ev == "lifecycle" and "Preflight compression" in msg
             for ev, msg in status_messages
         )
 
-    def test_preflight_defers_when_recent_real_usage_fit(self, agent):
-        """A noisy rough estimate should not re-compact a recently fitting request."""
+    def test_preflight_stays_disabled_when_recent_real_usage_fit(self, agent):
+        """A noisy rough estimate should not trigger proactive compaction."""
         agent.compression_enabled = True
         agent.context_compressor.context_length = 200_000
         agent.context_compressor.threshold_tokens = 100_000
@@ -570,8 +591,8 @@ class TestPreflightCompression:
             for ev, msg in status_messages
         )
 
-    def test_preflight_compresses_when_rough_growth_after_fit_is_large(self, agent):
-        """Large rough growth after a fitting request still triggers preflight."""
+    def test_preflight_stays_disabled_when_rough_growth_after_fit_is_large(self, agent):
+        """Large rough growth no longer triggers proactive preflight compression."""
         agent.compression_enabled = True
         agent.context_compressor.context_length = 200_000
         agent.context_compressor.threshold_tokens = 100_000
@@ -591,13 +612,10 @@ class TestPreflightCompression:
         )
         agent.client.chat.completions.create.side_effect = [ok_resp]
 
-        # First rough estimate must clear the threshold so preflight fires
-        # (rough growth since the last fitting request is large, so the
-        # deferral path is NOT taken). Every estimate after compaction is
-        # sub-threshold. Use a callable side_effect rather than a fixed list
-        # so we don't have to predict how many times the loop re-estimates —
-        # the post-response real-token estimate is an extra call that a
-        # 2-element list would exhaust (StopIteration).
+        # First rough estimate clears the old threshold path. Every later
+        # estimate is sub-threshold. Use a callable side_effect rather than a
+        # fixed list so we don't have to predict how many times the loop
+        # re-estimates.
         _rough_calls = {"n": 0}
 
         def _rough_estimate(*_args, **_kwargs):
@@ -618,7 +636,7 @@ class TestPreflightCompression:
             )
             result = agent.run_conversation("hello", conversation_history=big_history)
 
-        mock_compress.assert_called_once()
+        mock_compress.assert_not_called()
         assert result["completed"] is True
 
     def test_no_preflight_when_under_threshold(self, agent):
@@ -671,13 +689,8 @@ class TestPreflightCompression:
 
         mock_compress.assert_not_called()
 
-    def test_preflight_respects_anti_thrash(self, agent):
-        """Preflight must call ``should_compress()`` so anti-thrash applies.
-
-        Regression for #29335 — preflight used to bypass ``should_compress()``
-        and re-trigger every turn even when the prior two passes each saved
-        <10% (the canonical infinite-compression-loop signal).
-        """
+    def test_disabled_preflight_does_not_consult_anti_thrash(self, agent):
+        """With proactive preflight disabled, threshold and anti-thrash gates are bypassed."""
         agent.compression_enabled = True
         agent.context_compressor.context_length = 2000
         agent.context_compressor.threshold_tokens = 200
@@ -699,22 +712,12 @@ class TestPreflightCompression:
         ):
             result = agent.run_conversation("hello", conversation_history=big_history)
 
-        # The gate consulted should_compress — anti-thrash had a chance to vote.
-        mock_should.assert_called()
-        # And vetoed: even though tokens >= threshold, no compression ran.
+        mock_should.assert_not_called()
         mock_compress.assert_not_called()
         assert result["completed"] is True
 
-    def test_preflight_seeds_display_tokens_when_compression_aborts(self, agent):
-        """Display must reflect the real context size even when compression no-ops.
-
-        Regression: the CLI status bar reads ``last_prompt_tokens``, which only
-        updated from a *successful* API response. When the loaded history was
-        oversized but compression failed to reduce it (e.g. the auxiliary
-        summary model timed out), the bar stayed stuck at the old, smaller
-        value while the preflight estimate reported a much larger number —
-        looking permanently out of sync.
-        """
+    def test_disabled_preflight_does_not_seed_display_tokens(self, agent):
+        """Preflight estimates are no longer applied before a provider response."""
         agent.compression_enabled = True
         agent.context_compressor.context_length = 200_000
         agent.context_compressor.threshold_tokens = 130_000
@@ -742,11 +745,9 @@ class TestPreflightCompression:
             result = agent.run_conversation("hello", conversation_history=big_history)
 
         assert result["completed"] is True
-        # The display token count was revised up to the fresh preflight estimate,
-        # not left at the stale 74_400.
-        assert agent.context_compressor.last_prompt_tokens == 144_669
+        assert agent.context_compressor.last_prompt_tokens == 74_400
 
-    def test_preflight_seed_only_revises_upward(self, agent):
+    def test_disabled_preflight_does_not_clobber_larger_tracked_usage(self, agent):
         """A larger tracked value must not be clobbered by a smaller estimate."""
         agent.compression_enabled = True
         agent.context_compressor.context_length = 200_000
@@ -776,11 +777,11 @@ class TestPreflightCompression:
         assert agent.context_compressor.last_prompt_tokens == 160_000
 
 
-class TestToolResultPreflightCompression:
-    """Compression should trigger when tool results push context past the threshold."""
+class TestToolResultProactiveCompressionDisabled:
+    """Tool results should not trigger proactive compression between provider calls."""
 
-    def test_large_tool_results_trigger_compression(self, agent):
-        """When tool results push estimated tokens past threshold, compress before next call."""
+    def test_large_tool_results_do_not_trigger_proactive_compression(self, agent):
+        """Large tool results continue to the next call; hard overflow handles fallback."""
         agent.compression_enabled = True
         agent.context_compressor.context_length = 200_000
         agent.context_compressor.threshold_tokens = 130_000  # below the 135k reported usage
@@ -814,7 +815,7 @@ class TestToolResultPreflightCompression:
             )
             result = agent.run_conversation("hello")
 
-        mock_compress.assert_called_once()
+        mock_compress.assert_not_called()
         assert result["completed"] is True
 
     def test_anthropic_prompt_too_long_safety_net(self, agent):

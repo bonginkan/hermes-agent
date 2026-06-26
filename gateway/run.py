@@ -1957,6 +1957,7 @@ from gateway.config import (
     load_gateway_config,
 )
 from gateway.session import (
+    SessionEntry,
     SessionStore,
     SessionSource,
     SessionContext,
@@ -1994,6 +1995,10 @@ from gateway.whatsapp_identity import (
 logger = logging.getLogger(__name__)
 
 _DEFAULT_DISCORD_SETTINGS_OWNER_IDS = {"1088738096725630997"}
+_DEFAULT_KABOSU_FULL_RESPONSE_USER_IDS = {
+    "473730953735438336",
+    "804646947029254185",
+}
 _DISCORD_RUNTIME_SETTINGS_REQUEST_RE = re.compile(
     r"("
     r"(?:~|/Users/[^\s]+)?/\.hermes/(?:config\.yaml|SOUL\.md)\b"
@@ -2003,6 +2008,55 @@ _DISCORD_RUNTIME_SETTINGS_REQUEST_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+_KABOSU_DISCORD_OWNER_QUESTION_RE = re.compile(
+    r"("
+    r"(?:owner|オーナー).{0,24}(?:誰|だれ|どれ|どの|私|自分|\bme\b|\bwho\b)"
+    r"|(?:誰|だれ|私|自分|\bme\b|\bwho\b).{0,24}(?:owner|オーナー)"
+    r"|(?:owner|オーナー).{0,24}(?:何人|何名|人数|count)"
+    r")",
+    re.IGNORECASE,
+)
+_KABOSU_DISCORD_OWNER_REFLECTION_RE = re.compile(
+    r"("
+    r"(?:owner|オーナー).{0,40}(?:性格|人格|思想|考察|似|似通|価値観|哲学|判断癖)"
+    r"|(?:性格|人格|思想|考察|似|似通|価値観|哲学|判断癖).{0,40}(?:owner|オーナー)"
+    r")",
+    re.IGNORECASE,
+)
+_DISCORD_RUNTIME_SETTINGS_DISCUSSION_RE = re.compile(
+    r"(?:話|整理|確認|考察|比較|説明|違い|とは|について|性格|人格|思想|似|権限スコープ|権限モデル)",
+    re.IGNORECASE,
+)
+_DISCORD_RUNTIME_SETTINGS_ACTION_RE = re.compile(
+    r"("
+    r"(?:変更|更新|書き換え|書換|直|設定|反映).{0,12}(?:して|しといて|しておいて|お願い|頼む|ほしい|ください|くれ)"
+    r"|(?:set|update|edit|change)\b"
+    r")",
+    re.IGNORECASE,
+)
+_KABOSU_DISCORD_RUNTIME_VERIFY_RE = re.compile(
+    r"("
+    r"(?:この処理|処理|実装|反映|設定|runtime|compaction|compact|コンパクション|コンテキスト).{0,40}"
+    r"(?:正しく|確認|チェック|verify|状態|有効|効いて|できて|詰ま|終わら)"
+    r"|(?:正しく|確認|チェック|verify|状態|有効|効いて|詰ま|終わら).{0,40}"
+    r"(?:この処理|処理|実装|反映|設定|runtime|compaction|compact|コンパクション|コンテキスト)"
+    r"|(?:何|なんで|なぜ|理由|原因).{0,40}(?:詰ま|終わら)"
+    r"|(?:詰ま|終わら).{0,40}(?:何|なんで|なぜ|理由|原因)"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _coerce_string_set(value: Any) -> set[str]:
+    if value is None:
+        return set()
+    if isinstance(value, str):
+        values = value.split(",")
+    elif isinstance(value, (list, tuple, set)):
+        values = value
+    else:
+        values = [value]
+    return {str(part).strip() for part in values if str(part).strip()}
 
 
 def _discord_settings_owner_ids() -> set[str]:
@@ -2011,7 +2065,7 @@ def _discord_settings_owner_ids() -> set[str]:
         or os.environ.get("HERMES_DISCORD_OWNER_USER_IDS")
         or ""
     )
-    ids = {part.strip() for part in raw.split(",") if part.strip()}
+    ids = _coerce_string_set(raw)
     return ids or set(_DEFAULT_DISCORD_SETTINGS_OWNER_IDS)
 
 
@@ -2020,11 +2074,165 @@ def _is_discord_settings_owner_source(source: Any) -> bool:
     return bool(user_id and user_id in _discord_settings_owner_ids())
 
 
+def _kabosu_full_response_user_ids(config: Optional[dict] = None) -> set[str]:
+    cfg = config if isinstance(config, dict) else {}
+    configured = (
+        cfg_get(cfg, "kabosu", "discord", "full_response_user_ids")
+        or cfg_get(cfg, "display", "platforms", "discord", "full_response_user_ids")
+    )
+    return _coerce_string_set(configured) or set(_DEFAULT_KABOSU_FULL_RESPONSE_USER_IDS)
+
+
+def _is_kabosu_discord_simple_response_source(
+    source: Any,
+    config: Optional[dict] = None,
+) -> bool:
+    if _gateway_platform_value(getattr(source, "platform", None)) != "discord":
+        return False
+    user_id = str(getattr(source, "user_id", "") or "").strip()
+    if not user_id:
+        return True
+    return user_id not in _kabosu_full_response_user_ids(config)
+
+
+def _kabosu_response_visibility_context(
+    source: Any,
+    config: Optional[dict] = None,
+) -> str:
+    if _gateway_platform_value(getattr(source, "platform", None)) != "discord":
+        return ""
+    if _is_kabosu_discord_simple_response_source(source, config):
+        return (
+            "Kabosu Discord response visibility: simple_mode.\n"
+            "- Reply in Japanese at about 500 characters when possible.\n"
+            "- Start with the conclusion or result.\n"
+            "- Every sentence must add one new useful fact, judgment, blocker, or next action.\n"
+            "- Delete duplicate meaning, generic reassurance, obvious setup lines, and proof-of-work detail.\n"
+            "- Do not mention commands, tools, files, tests, logs, internal steps, or verification process unless the user must decide from that detail.\n"
+            "- Preserve only what changed, what the result means, remaining risk, and the next required action."
+        )
+    return (
+        "Kabosu Discord response visibility: full_mode.\n"
+        "- Richer reasoning and steering detail is allowed for this requester.\n"
+        "- Still maximize information density: every sentence must add new information.\n"
+        "- Remove repeated meaning, obvious process narration, and generic closing lines."
+    )
+
+
 def _looks_like_discord_runtime_settings_request(text: str) -> bool:
     raw = (text or "").strip()
     if not raw or raw.startswith("/"):
         return False
-    return bool(_DISCORD_RUNTIME_SETTINGS_REQUEST_RE.search(raw))
+    if not _DISCORD_RUNTIME_SETTINGS_REQUEST_RE.search(raw):
+        return False
+    if _DISCORD_RUNTIME_SETTINGS_DISCUSSION_RE.search(raw) and not _DISCORD_RUNTIME_SETTINGS_ACTION_RE.search(raw):
+        return False
+    return True
+
+
+def _looks_like_kabosu_discord_owner_question(text: str) -> bool:
+    raw = (text or "").strip()
+    if not raw or raw.startswith("/"):
+        return False
+    if _KABOSU_DISCORD_OWNER_REFLECTION_RE.search(raw):
+        return False
+    return bool(_KABOSU_DISCORD_OWNER_QUESTION_RE.search(raw))
+
+
+def _looks_like_kabosu_discord_runtime_verification(text: str) -> bool:
+    raw = (text or "").strip()
+    if not raw or raw.startswith("/"):
+        return False
+    return bool(_KABOSU_DISCORD_RUNTIME_VERIFY_RE.search(raw))
+
+
+def _format_kabosu_owner_state(source: Any) -> str:
+    owner_ids = sorted(_discord_settings_owner_ids())
+    sender_id = str(getattr(source, "user_id", "") or "").strip()
+    owner_text = ", ".join(owner_ids) if owner_ids else "未設定"
+    if sender_id and sender_id in set(owner_ids):
+        return f"owner は {owner_text}。今回の送信者IDも一致してるから、owner 扱いでOK。"
+    if sender_id:
+        return f"owner は {owner_text}。今回の送信者ID {sender_id} は owner と一致してない。"
+    return f"owner は {owner_text}。今回の送信者IDは取得できてない。"
+
+
+def _format_kabosu_runtime_verification_state(config: Optional[dict] = None) -> str:
+    cfg = config if isinstance(config, dict) else {}
+    model_cfg = cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
+    model_name = ""
+    provider = ""
+    base_url = ""
+    if isinstance(cfg.get("model"), str):
+        model_name = str(cfg.get("model") or "").strip()
+    elif isinstance(model_cfg, dict):
+        model_name = str(
+            model_cfg.get("default")
+            or model_cfg.get("model")
+            or ""
+        ).strip()
+        provider = str(model_cfg.get("provider") or "").strip()
+        base_url = str(model_cfg.get("base_url") or "").strip()
+
+    compression_cfg = cfg.get("compression") if isinstance(cfg.get("compression"), dict) else {}
+    compression_enabled = is_truthy_value(
+        compression_cfg.get("enabled"),
+        default=True,
+    )
+    codex_native_first = is_truthy_value(
+        compression_cfg.get("codex_native_first"),
+        default=True,
+    )
+    provider_l = provider.lower()
+    base_url_l = base_url.lower()
+    is_codex_route = provider_l == "openai-codex" or "codex" in base_url_l
+    native_state = "有効" if compression_enabled and codex_native_first and is_codex_route else "未使用"
+
+    fallback_raw = compression_cfg.get("overflow_fallback_max_attempts")
+    fallback_norm = "" if fallback_raw is None else str(fallback_raw).strip().lower()
+    if fallback_norm in {"", "auto"}:
+        fallback_state = "auto"
+        if compression_enabled and codex_native_first and is_codex_route:
+            fallback_state += "（Codex経路では1回）"
+    else:
+        fallback_state = str(fallback_raw)
+
+    route_bits = []
+    if provider:
+        route_bits.append(provider)
+    if model_name:
+        route_bits.append(model_name)
+    route_text = " / ".join(route_bits) if route_bits else "未設定"
+    return (
+        "確認できる範囲では意図どおり。"
+        f"現在の経路は {route_text}、Codex native compaction は {native_state}、"
+        f"Hermes側のoverflow fallback回数は {fallback_state}。"
+    )
+
+
+def _kabosu_discord_lightweight_runtime_reply(
+    source: Any,
+    text: str,
+    config: Optional[dict] = None,
+) -> Optional[str]:
+    """Reply to Discord control-plane checks without creating an agent turn."""
+    if _gateway_platform_value(getattr(source, "platform", None)) != "discord":
+        return None
+    raw = (text or "").strip()
+    if not raw or raw.startswith("/"):
+        return None
+
+    asks_owner = _looks_like_kabosu_discord_owner_question(raw)
+    asks_runtime = _looks_like_kabosu_discord_runtime_verification(raw)
+    if not asks_owner and not asks_runtime:
+        return None
+
+    parts = ["結論、確認できる範囲ではこう。"]
+    if asks_owner:
+        parts.append(_format_kabosu_owner_state(source))
+    if asks_runtime:
+        parts.append(_format_kabosu_runtime_verification_state(config))
+    return "\n".join(parts)
 
 # Sentinel placed into _running_agents immediately when a session starts
 # processing, *before* any await.  Prevents a second message for the same
@@ -3536,6 +3744,160 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 "telegram topic binding refresh failed (%s)", reason, exc_info=True,
             )
 
+    @staticmethod
+    def _session_row_value(row: Any, key: str, default: Any = None) -> Any:
+        if not row:
+            return default
+        if isinstance(row, dict):
+            return row.get(key, default)
+        try:
+            return row[key]
+        except Exception:
+            return default
+
+    def _resolve_canonical_gateway_session(
+        self,
+        source: SessionSource,
+        session_entry: SessionEntry,
+    ) -> tuple[SessionEntry, Optional[str]]:
+        """Resolve a gateway session to its canonical compression tip.
+
+        This runs before context construction so a stale compressed parent
+        cannot rehydrate an oversized transcript. Returns ``(entry, block)``,
+        where ``block`` is a user-facing message when normal processing should
+        stop rather than loading an archived compressed parent.
+        """
+        session_db = getattr(self, "_session_db", None)
+        if session_db is None or session_entry is None:
+            return session_entry, None
+
+        original_session_id = str(getattr(session_entry, "session_id", "") or "")
+        if not original_session_id:
+            return session_entry, None
+
+        platform = getattr(source, "platform", None)
+        platform_value = platform.value if hasattr(platform, "value") else str(platform or "")
+        platform_thread_id = str(
+            getattr(source, "thread_id", None)
+            or getattr(source, "chat_id", None)
+            or ""
+        )
+
+        try:
+            original_row = session_db.get_session(original_session_id)
+        except Exception:
+            logger.debug(
+                "gateway canonical session: get_session failed for %s",
+                original_session_id,
+                exc_info=True,
+            )
+            original_row = None
+
+        original_end_reason = self._session_row_value(original_row, "end_reason")
+        message_count = self._session_row_value(original_row, "message_count")
+        original_last_prompt_tokens = getattr(session_entry, "last_prompt_tokens", 0) or 0
+
+        compression_tip_session_id = original_session_id
+        try:
+            compression_tip_session_id = session_db.get_compression_tip(
+                original_session_id,
+                source=platform_value or None,
+            )
+        except TypeError:
+            compression_tip_session_id = session_db.get_compression_tip(original_session_id)
+        except Exception:
+            logger.debug(
+                "gateway canonical session: compression-tip lookup failed for %s",
+                original_session_id,
+                exc_info=True,
+            )
+
+        tip_row = None
+        if compression_tip_session_id:
+            try:
+                tip_row = session_db.get_session(compression_tip_session_id)
+            except Exception:
+                logger.debug(
+                    "gateway canonical session: get_session failed for tip %s",
+                    compression_tip_session_id,
+                    exc_info=True,
+                )
+        tip_end_reason = self._session_row_value(tip_row, "end_reason")
+
+        resolved_session_id = original_session_id
+        redirected = False
+        block_message = None
+        stale_message = (
+            "This session points at compressed archived history, but no usable "
+            "continuation was found. I stopped before loading the oversized "
+            "parent history. Use /new to start fresh, or ask an operator to "
+            "repair the session binding."
+        )
+
+        if compression_tip_session_id and compression_tip_session_id != original_session_id:
+            if not tip_row or tip_end_reason == "compression":
+                block_message = stale_message
+            else:
+                redirect_fn = getattr(self.session_store, "redirect_session", None)
+                redirected_entry = None
+                if callable(redirect_fn):
+                    try:
+                        redirected_entry = redirect_fn(
+                            session_entry.session_key,
+                            compression_tip_session_id,
+                        )
+                    except Exception:
+                        logger.debug(
+                            "gateway canonical session: redirect_session failed for %s -> %s",
+                            original_session_id,
+                            compression_tip_session_id,
+                            exc_info=True,
+                        )
+                if isinstance(redirected_entry, SessionEntry):
+                    session_entry = redirected_entry
+                else:
+                    session_entry.session_id = compression_tip_session_id
+                    session_entry.updated_at = datetime.now()
+                    session_entry.last_prompt_tokens = 0
+                    try:
+                        self.session_store._save()
+                    except Exception:
+                        logger.debug("gateway canonical session: fallback save failed", exc_info=True)
+                resolved_session_id = compression_tip_session_id
+                redirected = True
+                self._sync_telegram_topic_binding(
+                    source,
+                    session_entry,
+                    reason="canonical-compression-tip",
+                )
+        elif original_end_reason == "compression":
+            block_message = stale_message
+
+        log_payload = {
+            "platform": platform_value,
+            "platform_thread_id": platform_thread_id,
+            "original_session_id": original_session_id,
+            "resolved_session_id": resolved_session_id,
+            "compression_tip_session_id": compression_tip_session_id,
+            "redirected_by_compression_tip": redirected,
+            "original_end_reason": original_end_reason,
+            "tip_end_reason": tip_end_reason,
+            "message_count": message_count,
+            "last_prompt_tokens": original_last_prompt_tokens,
+        }
+        logger.info(
+            "gateway canonical session: %s",
+            json.dumps(log_payload, sort_keys=True),
+        )
+
+        if block_message:
+            logger.warning(
+                "gateway canonical session blocked stale compressed parent: %s",
+                json.dumps(log_payload, sort_keys=True),
+            )
+
+        return session_entry, block_message
+
     def _recover_telegram_topic_thread_id(
         self,
         source: SessionSource,
@@ -4783,13 +5145,17 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 logger.debug("Failed interrupting agent during shutdown: %s", e)
 
     async def _notify_active_sessions_of_shutdown(self) -> None:
-        """Send shutdown/restart notifications to active chats and home channels.
+        """Send shutdown/restart notifications for active chats.
 
         Called at the very start of stop() — adapters are still connected so
         messages can be delivered. Best-effort: individual send failures are
         logged and swallowed so they never block the shutdown sequence.
         """
         active = self._snapshot_running_agents()
+        if not active:
+            logger.debug("Skipping shutdown notifications: no active sessions")
+            return
+
         restart_source = self._restart_command_source if self._restart_requested else None
 
         action = "restarting" if self._restart_requested else "shutting down"
@@ -7776,6 +8142,20 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     )
                 _update_prompts.pop(_quick_key, None)
 
+        if not is_internal and source.platform == Platform.DISCORD:
+            _lightweight_reply = _kabosu_discord_lightweight_runtime_reply(
+                source,
+                event.text or "",
+                _load_gateway_config(),
+            )
+            if _lightweight_reply:
+                logger.info(
+                    "Kabosu Discord lightweight runtime reply: user_id=%s chat=%s",
+                    source.user_id or "unknown",
+                    source.chat_id or "unknown",
+                )
+                return _lightweight_reply
+
         # Intercept messages that are responses to a pending clarify
         # request that is awaiting free-form text (either an open-ended
         # clarify with no choices, or one where the user picked the
@@ -9197,51 +9577,35 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 binding = None
             if binding:
                 bound_session_id = str(binding.get("session_id") or "")
-                # Heal bindings that point at a pre-compression parent: walk
-                # the compression-continuation chain forward to its tip so the
-                # next message resumes the compressed child instead of
-                # reloading the oversized parent transcript (#20470/#29712/
-                # #33414). Returns the input unchanged when the session isn't
-                # a compression parent, so this is cheap and safe.
-                if bound_session_id and self._session_db is not None:
-                    try:
-                        canonical_session_id = self._session_db.get_compression_tip(
-                            bound_session_id,
-                        )
-                    except Exception:
-                        logger.debug(
-                            "compression-tip lookup failed for %s",
-                            bound_session_id, exc_info=True,
-                        )
-                        canonical_session_id = bound_session_id
-                    if (
-                        canonical_session_id
-                        and canonical_session_id != bound_session_id
-                    ):
-                        bound_session_id = canonical_session_id
                 if bound_session_id and bound_session_id != session_entry.session_id:
-                    # Route the override through SessionStore so the session_key
-                    # → session_id mapping is persisted to disk and the previous
-                    # lane session is ended cleanly. Mutating session_entry in
-                    # place here created a split-brain state where the JSON
-                    # index pointed at one id but code downstream used another.
-                    switched = self.session_store.switch_session(session_key, bound_session_id)
-                    if switched is not None:
-                        session_entry = switched
-                # If the stored binding pointed at a parent, rewrite it to the
-                # canonical descendant now that we've followed the chain.
-                if (
-                    bound_session_id
-                    and bound_session_id != str(binding.get("session_id") or "")
-                ):
-                    self._sync_telegram_topic_binding(
-                        source, session_entry, reason="compression-tip-walk",
-                    )
+                    # Persist the topic binding override before context build,
+                    # but do not reopen/end DB sessions here. A bound session
+                    # may be a compressed parent; the gateway-wide canonical
+                    # resolver below follows that tip without clearing the
+                    # parent's compression end_reason.
+                    redirect_fn = getattr(self.session_store, "redirect_session", None)
+                    redirected = None
+                    if callable(redirect_fn):
+                        redirected = redirect_fn(session_key, bound_session_id)
+                    if isinstance(redirected, SessionEntry):
+                        session_entry = redirected
+                    else:
+                        session_entry.session_id = bound_session_id
+                        try:
+                            self.session_store._save()
+                        except Exception:
+                            logger.debug("telegram topic binding redirect fallback save failed", exc_info=True)
             else:
                 try:
                     self._record_telegram_topic_binding(source, session_entry)
                 except Exception:
                     logger.debug("Failed to record Telegram topic binding", exc_info=True)
+        session_entry, _stale_session_message = self._resolve_canonical_gateway_session(
+            source,
+            session_entry,
+        )
+        if _stale_session_message:
+            return _stale_session_message
         if getattr(session_entry, "was_auto_reset", False):
             # Treat auto-reset as a full conversation boundary — drop every
             # session-scoped transient state so the fresh session does not
@@ -9989,6 +10353,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     if source.platform == Platform.MATTERMOST
                     else getattr(self, "_show_reasoning", False)
                 )
+            if _is_kabosu_discord_simple_response_source(source, _load_gateway_config()):
+                _show_reasoning_effective = False
             if _show_reasoning_effective and response and not _intentional_silence:
                 last_reasoning = agent_result.get("last_reasoning")
                 if last_reasoning:
@@ -10140,8 +10506,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     # above), and that _sync also rewrote the (chat_id, thread_id)
                     # -> bloated-child binding. reset_session swaps in a clean,
                     # parentless session, but without re-syncing the binding the
-                    # next inbound message in this topic gets switch_session'd back
-                    # onto the bloated child by the binding-heal walk, reloads the
+                    # next inbound message in this topic gets redirected back
+                    # onto the bloated child by the binding-heal path, reloads the
                     # oversized transcript, and re-triggers compression exhaustion
                     # forever (#35809 — regression of the #9893/#10063 auto-reset).
                     # No-op on non-topic lanes.
@@ -10271,10 +10637,20 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # Token counts and model are now persisted by the agent directly.
             # Keep only last_prompt_tokens here for context-window tracking and
             # compression decisions.
-            self.session_store.update_session(
-                session_entry.session_key,
-                last_prompt_tokens=agent_result.get("last_prompt_tokens", 0),
-            )
+            if agent_result.get("compression_exhausted"):
+                # reset_session() already created a clean session with zeroed
+                # token counters.  Do not copy the oversized failed prompt's
+                # token count onto that fresh entry; it makes empty sessions
+                # look bloated and can skew later hygiene decisions.
+                self.session_store.update_session(
+                    session_entry.session_key,
+                    last_prompt_tokens=0,
+                )
+            else:
+                self.session_store.update_session(
+                    session_entry.session_key,
+                    last_prompt_tokens=agent_result.get("last_prompt_tokens", 0),
+                )
 
             # Intentional silence is a delivery decision, not a transcript
             # mutation.  The agent's [SILENT]/NO_REPLY assistant turn above is
@@ -14726,6 +15102,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         
         user_config = _load_gateway_config()
         platform_key = _platform_config_key(source.platform)
+        kabosu_simple_response_mode = _is_kabosu_discord_simple_response_source(
+            source,
+            user_config,
+        )
 
         from hermes_cli.tools_config import _get_platform_tools
         enabled_toolsets = sorted(_get_platform_tools(user_config, platform_key))
@@ -14804,6 +15184,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             platform=source.platform,
             require_platform_override_for={Platform.MATTERMOST},
         )
+        if kabosu_simple_response_mode:
+            tool_progress_enabled = False
+            interim_assistant_messages_enabled = False
+            _thinking_enabled = False
         needs_progress_queue = tool_progress_enabled or _thinking_enabled
 
 
@@ -15545,6 +15929,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 combined_ephemeral = (combined_ephemeral + "\n\n" + event_channel_prompt).strip()
             if self._ephemeral_system_prompt:
                 combined_ephemeral = (combined_ephemeral + "\n\n" + self._ephemeral_system_prompt).strip()
+            response_visibility_context = _kabosu_response_visibility_context(
+                source,
+                user_config,
+            )
+            if response_visibility_context:
+                combined_ephemeral = (combined_ephemeral + "\n\n" + response_visibility_context).strip()
 
             max_iterations = _current_max_iterations()
 
@@ -15596,6 +15986,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             _want_stream_deltas = _streaming_enabled
             _want_interim_messages = interim_assistant_messages_enabled
             _want_interim_consumer = _want_interim_messages
+            if kabosu_simple_response_mode:
+                _want_stream_deltas = False
+                _want_interim_messages = False
+                _want_interim_consumer = False
             if _want_stream_deltas or _want_interim_consumer:
                 try:
                     from gateway.stream_consumer import GatewayStreamConsumer, StreamConsumerConfig

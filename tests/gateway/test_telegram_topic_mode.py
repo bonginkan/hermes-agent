@@ -115,6 +115,18 @@ def _make_runner(session_db=None):
             origin=None,
         )
     runner.session_store.switch_session = MagicMock(side_effect=_switch_session)
+
+    def _redirect_session(session_key, target_session_id):
+        return SessionEntry(
+            session_key=session_key,
+            session_id=target_session_id,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+            platform=Platform.TELEGRAM,
+            chat_type="dm",
+            origin=_make_source(thread_id="17585"),
+        )
+    runner.session_store.redirect_session = MagicMock(side_effect=_redirect_session)
     runner._running_agents = {}
     runner._running_agents_ts = {}
     runner._pending_messages = {}
@@ -488,12 +500,12 @@ async def test_topic_binding_follows_compression_tip_on_read(tmp_path, monkeypat
     )
 
     runner = _make_runner(session_db=session_db)
-    # switch_session() returns a SessionEntry pointing at whatever id was
-    # requested; capture the requested id for assertion.
-    switched_to: dict = {}
+    # redirect_session() returns a SessionEntry pointing at whatever id was
+    # requested; capture the requested ids for assertion.
+    redirected_to: list[str] = []
 
-    def fake_switch(_key, new_session_id):
-        switched_to["id"] = new_session_id
+    def fake_redirect(_key, new_session_id):
+        redirected_to.append(new_session_id)
         return SessionEntry(
             session_key=topic_key,
             session_id=new_session_id,
@@ -504,7 +516,7 @@ async def test_topic_binding_follows_compression_tip_on_read(tmp_path, monkeypat
             origin=topic_source,
         )
 
-    runner.session_store.switch_session = MagicMock(side_effect=fake_switch)
+    runner.session_store.redirect_session = MagicMock(side_effect=fake_redirect)
     runner._run_agent = AsyncMock(
         return_value={
             "success": True,
@@ -521,7 +533,7 @@ async def test_topic_binding_follows_compression_tip_on_read(tmp_path, monkeypat
     await runner._handle_message(_make_event("follow up after compression", thread_id="17585"))
 
     # The route was advanced to the compression tip, not the stale parent.
-    assert switched_to.get("id") == "child-session"
+    assert redirected_to[-1] == "child-session"
     # The binding row was rewritten to point at the descendant so future
     # inbound messages skip the tip walk and resolve directly.
     refreshed = session_db.get_telegram_topic_binding(

@@ -14,31 +14,33 @@ hardcoded constants in two places:
 
 This module centralises those values behind a single config section
 (``tool_output`` in ``config.yaml``) so power users can tune them
-without patching the source. The existing hardcoded numbers remain as
-defaults, so behaviour is unchanged when the config key is absent.
+without patching the source. The current defaults are intentionally compact;
+users who need the historical larger context footprint can raise the limits in
+``config.yaml``.
 
 Example ``config.yaml``::
 
     tool_output:
-      max_bytes: 100000        # terminal output cap (chars)
-      max_lines: 5000          # read_file pagination + truncation cap
-      max_line_length: 2000    # per-line length cap before '... [truncated]'
+      max_bytes: 12000         # terminal output cap (chars)
+      max_lines: 800           # read_file pagination + truncation cap
+      max_line_length: 1200    # per-line length cap before '... [truncated]'
 
 The limits reader is defensive: any error (missing config file, invalid
-value type, etc.) falls back to the built-in defaults so tools never
-fail because of a malformed config.
+value type, etc.) falls back to the built-in defaults so tools never fail
+because of a malformed config. Large terminal output is expected to be
+stored as an artifact and represented in model history by a compact receipt.
 """
 
 from __future__ import annotations
 
 from typing import Any, Dict
 
-# Hardcoded defaults — these match the pre-existing values, so adding
-# this module is behaviour-preserving for users who don't set
-# ``tool_output`` in config.yaml.
-DEFAULT_MAX_BYTES = 50_000       # terminal_tool.MAX_OUTPUT_CHARS
-DEFAULT_MAX_LINES = 2000         # file_operations.MAX_LINES
-DEFAULT_MAX_LINE_LENGTH = 2000   # file_operations.MAX_LINE_LENGTH
+# Defaults are intentionally smaller than the historical 50 KB / 2000-line
+# caps. Long-running agents should persist raw output as evidence artifacts and
+# carry compact receipts in model history, not repeatedly replay huge logs.
+DEFAULT_MAX_BYTES = 12_000
+DEFAULT_MAX_LINES = 800
+DEFAULT_MAX_LINE_LENGTH = 1200
 
 # Module-level cache — populated on first call.
 # Avoids repeated config file I/O on every tool call.

@@ -735,6 +735,17 @@ def run_conversation(
                     _fenced = build_memory_context_block(_ext_prefetch_cache)
                     if _fenced:
                         _injections.append(_fenced)
+                try:
+                    from tools.tool_receipts import build_task_state_context
+
+                    _task_state_context = build_task_state_context(
+                        task_id=effective_task_id or "",
+                        session_id=getattr(agent, "session_id", "") or "",
+                    )
+                    if _task_state_context:
+                        _injections.append(_task_state_context)
+                except Exception as _task_state_err:
+                    logger.debug("task-state context injection failed: %s", _task_state_err)
                 if _plugin_user_context:
                     _injections.append(_plugin_user_context)
                 if _injections:
@@ -920,7 +931,10 @@ def run_conversation(
         retry_count = 0
         max_retries = 10**9
         _retry = TurnRetryState()
-        max_compression_attempts = 10**9
+        max_compression_attempts = int(
+            getattr(agent, "_compression_overflow_fallback_max_attempts", 10**9)
+            or 0
+        )
 
         finish_reason = "stop"
         response = None  # Guard against UnboundLocalError if all retries fail

@@ -33,10 +33,10 @@ def _reset_limits_cache():
 
 
 class TestDefaults:
-    def test_defaults_match_previous_hardcoded_values(self):
-        assert tol.DEFAULT_MAX_BYTES == 50_000
-        assert tol.DEFAULT_MAX_LINES == 2000
-        assert tol.DEFAULT_MAX_LINE_LENGTH == 2000
+    def test_defaults_are_compact_enough_for_long_running_agents(self):
+        assert tol.DEFAULT_MAX_BYTES == 12_000
+        assert tol.DEFAULT_MAX_LINES == 800
+        assert tol.DEFAULT_MAX_LINE_LENGTH == 1200
 
     def test_get_limits_returns_defaults_when_config_missing(self):
         with patch("hermes_cli.config.load_config", return_value={}):
@@ -157,6 +157,6 @@ class TestIntegrationReadPagination:
         from tools.file_operations import normalize_read_pagination
         with patch("hermes_cli.config.load_config", return_value={}):
             offset, limit = normalize_read_pagination(offset=10, limit=100000)
-        # Clamped to default MAX_LINES (2000).
+        # Clamped to default MAX_LINES.
         assert limit == tol.DEFAULT_MAX_LINES
         assert offset == 10

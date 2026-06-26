@@ -3299,6 +3299,29 @@ class TestCompressionChainProjection:
         # root1's tip must be tip1 (via mid1), not delegate1.
         assert db.get_compression_tip("root1") == "tip1"
 
+    def test_get_compression_tip_can_filter_by_source(self, db):
+        import time as _time
+
+        base = _time.time() - 3600
+        db.create_session("root1", "discord")
+        db._conn.execute(
+            "UPDATE sessions SET started_at=?, ended_at=?, end_reason=? WHERE id=?",
+            (base, base + 10, "compression", "root1"),
+        )
+        db.create_session("discord-tip", "discord", parent_session_id="root1")
+        db._conn.execute(
+            "UPDATE sessions SET started_at=? WHERE id=?",
+            (base + 11, "discord-tip"),
+        )
+        db.create_session("review-child", "background_review", parent_session_id="root1")
+        db._conn.execute(
+            "UPDATE sessions SET started_at=? WHERE id=?",
+            (base + 12, "review-child"),
+        )
+        db._conn.commit()
+
+        assert db.get_compression_tip("root1", source="discord") == "discord-tip"
+
     def test_list_surfaces_tip_for_compressed_root(self, db):
         """The list must show the tip's id/message_count/preview in place of
         the root row, so users can see and resume the live conversation.

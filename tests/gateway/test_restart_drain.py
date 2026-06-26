@@ -341,6 +341,23 @@ async def test_shutdown_notification_skipped_when_no_active_agents():
 
 
 @pytest.mark.asyncio
+async def test_shutdown_notification_skips_home_channel_when_no_active_agents():
+    """Idle restarts must not announce an interruption in the home channel."""
+    from gateway.config import HomeChannel, Platform
+
+    runner, adapter = make_restart_runner()
+    runner.config.platforms[Platform.TELEGRAM].home_channel = HomeChannel(
+        platform=Platform.TELEGRAM,
+        chat_id="home-42",
+        name="Ops Home",
+    )
+
+    await runner._notify_active_sessions_of_shutdown()
+
+    assert adapter.sent == []
+
+
+@pytest.mark.asyncio
 async def test_shutdown_notification_ignores_pending_sentinels():
     """Pending sentinels (not-yet-started agents) don't trigger notifications."""
     from gateway.run import _AGENT_PENDING_SENTINEL

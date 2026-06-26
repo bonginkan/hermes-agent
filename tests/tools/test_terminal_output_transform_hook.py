@@ -99,7 +99,12 @@ def test_terminal_output_uses_first_valid_string_from_hooks(monkeypatch, tmp_pat
     assert result["output"] == "first"
 
 
-def test_terminal_output_transform_still_truncates_long_replacement(monkeypatch, tmp_path):
+def test_terminal_output_transform_compacts_long_replacement_to_artifact(monkeypatch, tmp_path):
+    import tools.tool_output_artifacts as artifacts
+
+    monkeypatch.setattr("tools.tool_output_limits.get_max_bytes", lambda: 1000)
+    monkeypatch.setattr(artifacts, "_artifact_root", lambda: tmp_path / "artifacts")
+
     transformed_output = "PLUGIN-HEAD\n" + ("A" * 60000) + "\nPLUGIN-TAIL"
     result, _mock_env = _run_terminal(
         monkeypatch,
@@ -110,8 +115,12 @@ def test_terminal_output_transform_still_truncates_long_replacement(monkeypatch,
 
     assert "PLUGIN-HEAD" in result["output"]
     assert "PLUGIN-TAIL" in result["output"]
-    assert "[OUTPUT TRUNCATED" in result["output"]
+    assert "[OUTPUT COMPACTED" in result["output"]
     assert transformed_output != result["output"]
+    assert "output_artifact" in result
+    artifact_path = Path(result["output_artifact"]["path"])
+    assert artifact_path.exists()
+    assert artifact_path.read_text(encoding="utf-8") == transformed_output.strip()
 
 
 def test_terminal_output_transform_still_runs_strip_and_redact(monkeypatch, tmp_path):
@@ -206,4 +215,5 @@ def test_terminal_output_transform_integration_with_real_plugin(monkeypatch, tmp
 
     assert "PLUGIN-HEAD" in result["output"]
     assert "PLUGIN-TAIL" in result["output"]
-    assert "[OUTPUT TRUNCATED" in result["output"]
+    assert "[OUTPUT COMPACTED" in result["output"]
+    assert "output_artifact" in result

@@ -1283,13 +1283,49 @@ def init_agent(
     if not isinstance(_compression_cfg, dict):
         _compression_cfg = {}
     compression_threshold = float(_compression_cfg.get("threshold", 0.50))
-    # Per-model/route compaction-threshold override. Codex gpt-5.5 raises to
-    # 85% (the Codex backend caps the window at 272K, so the default 50% would
-    # compact at ~136K — half the usable context). Gated by an opt-out config
-    # flag so the user can fall back to the global threshold; when the override
-    # fires we stash a one-time notification (replayed on the first turn) that
-    # tells the user what changed and how to revert.
-    _codex_gpt55_autoraise = str(
+    compression_enabled = str(_compression_cfg.get("enabled", True)).lower() in {"true", "1", "yes"}
+
+    # Codex route policy: let Codex native context management/compaction see the
+    # full request first. Hermes compression remains available only as a hard
+    # provider-overflow fallback (handled in conversation_loop after a 413 /
+    # context-window rejection). This keeps normal quality on Codex while still
+    # giving gateway sessions a last-resort recovery path when native compaction
+    # does not fire in time.
+    _codex_native_first = str(
+        _compression_cfg.get("codex_native_first", True)
+    ).lower() in {"true", "1", "yes"}
+    _is_openai_codex_route = str(agent.provider or "").strip().lower() == "openai-codex"
+    agent._codex_native_compaction_first = bool(
+        _codex_native_first and _is_openai_codex_route
+    )
+
+    _fallback_attempts_default = 1 if agent._codex_native_compaction_first else 10**9
+    _raw_fallback_attempts = _compression_cfg.get(
+        "overflow_fallback_max_attempts",
+        "auto",
+    )
+    if str(_raw_fallback_attempts).strip().lower() in {"", "auto", "default"}:
+        _fallback_attempts = _fallback_attempts_default
+    else:
+        try:
+            if isinstance(_raw_fallback_attempts, bool):
+                raise ValueError
+            _fallback_attempts = int(_raw_fallback_attempts)
+            if _fallback_attempts < 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            _fallback_attempts = _fallback_attempts_default
+    agent._compression_overflow_fallback_max_attempts = _fallback_attempts
+
+    # Per-model/route compaction-threshold override. Codex gpt-5.5 historically
+    # raised to 85% (the Codex backend caps the window at 272K, so the default
+    # 50% would compact at ~136K — half the usable context). When
+    # codex_native_first is active, skip that proactive threshold override
+    # entirely: the threshold is not the Codex quality path, only a fallback
+    # implementation detail if the provider rejects the request.
+    _codex_gpt55_autoraise = (
+        not agent._codex_native_compaction_first
+    ) and str(
         _compression_cfg.get("codex_gpt55_autoraise", True)
     ).lower() in {"true", "1", "yes"}
     agent._compression_threshold_autoraised = None
@@ -1320,7 +1356,6 @@ def init_agent(
                 }
     except Exception:
         pass
-    compression_enabled = str(_compression_cfg.get("enabled", True)).lower() in {"true", "1", "yes"}
     compression_target_ratio = float(_compression_cfg.get("target_ratio", 0.20))
     compression_protect_last = int(_compression_cfg.get("protect_last_n", 20))
     # protect_first_n is the number of non-system messages to protect at
@@ -1690,7 +1725,14 @@ def init_agent(
         )
 
     if not agent.quiet_mode:
-        if compression_enabled:
+        if compression_enabled and getattr(agent, "_codex_native_compaction_first", False):
+            _fallback_max = getattr(agent, "_compression_overflow_fallback_max_attempts", 1)
+            _fallback_label = "disabled" if _fallback_max == 0 else f"max {_fallback_max} attempt(s)"
+            print(
+                f"📊 Context limit: {agent.context_compressor.context_length:,} tokens "
+                f"(Codex native compaction first; Hermes overflow fallback {_fallback_label})"
+            )
+        elif compression_enabled:
             print(f"📊 Context limit: {agent.context_compressor.context_length:,} tokens (compress at {int(compression_threshold*100)}% = {agent.context_compressor.threshold_tokens:,})")
         else:
             print(f"📊 Context limit: {agent.context_compressor.context_length:,} tokens (auto-compression disabled)")

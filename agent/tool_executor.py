@@ -58,6 +58,35 @@ def _ra():
     return run_agent
 
 
+def _record_tool_receipt_safely(
+    agent,
+    *,
+    tool_name: str,
+    args: Any,
+    result: Any,
+    effective_task_id: str,
+    tool_call_id: str,
+    duration_ms: int,
+) -> None:
+    if _is_multimodal_tool_result(result):
+        return
+    try:
+        from tools.tool_receipts import record_tool_receipt
+
+        record_tool_receipt(
+            tool_name=tool_name,
+            args=args,
+            result=result,
+            task_id=effective_task_id or "",
+            session_id=getattr(agent, "session_id", "") or "",
+            tool_call_id=tool_call_id or "",
+            turn_id=getattr(agent, "_current_turn_id", "") or "",
+            duration_ms=duration_ms,
+        )
+    except Exception as exc:
+        logger.debug("tool receipt recording failed for %s: %s", tool_name, exc)
+
+
 def _emit_terminal_post_tool_call(
     agent,
     *,
@@ -727,6 +756,16 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
             env=get_active_env(effective_task_id),
         ) if not _is_multimodal_tool_result(function_result) else function_result
 
+        _record_tool_receipt_safely(
+            agent,
+            tool_name=name,
+            args=args,
+            result=function_result,
+            effective_task_id=effective_task_id,
+            tool_call_id=tc.id,
+            duration_ms=int(tool_duration * 1000),
+        )
+
         subdir_hints = agent._subdirectory_hints.check_tool_call(name, args)
         if subdir_hints:
             if _is_multimodal_tool_result(function_result):
@@ -1378,6 +1417,16 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
             tool_use_id=tool_call.id,
             env=get_active_env(effective_task_id),
         ) if not _is_multimodal_tool_result(function_result) else function_result
+
+        _record_tool_receipt_safely(
+            agent,
+            tool_name=function_name,
+            args=function_args,
+            result=function_result,
+            effective_task_id=effective_task_id,
+            tool_call_id=tool_call.id,
+            duration_ms=int(tool_duration * 1000),
+        )
 
         # Discover subdirectory context files from tool arguments
         subdir_hints = agent._subdirectory_hints.check_tool_call(function_name, function_args)

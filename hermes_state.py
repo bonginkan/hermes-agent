@@ -2056,12 +2056,13 @@ class SessionDB:
 
         return f"{base} #{max_num + 1}"
 
-    def get_compression_tip(self, session_id: str) -> Optional[str]:
+    def get_compression_tip(self, session_id: str, source: Optional[str] = None) -> Optional[str]:
         """Walk the compression-continuation chain forward and return the tip.
 
         A compression continuation is a child session where:
         1. The parent's ``end_reason = 'compression'``
         2. The child was created AFTER the parent was ended (started_at >= ended_at)
+        3. If ``source`` is provided, the child has the same source
 
         The second condition distinguishes compression continuations from
         delegate subagents or branch children, which can also have a
@@ -2076,6 +2077,10 @@ class SessionDB:
         # pathological and shouldn't happen in practice. 100 = plenty.
         for _ in range(100):
             with self._lock:
+                source_clause = " AND source = ?" if source else ""
+                params = [current, current]
+                if source:
+                    params.append(source)
                 cursor = self._conn.execute(
                     "SELECT id FROM sessions "
                     "WHERE parent_session_id = ? "
@@ -2083,8 +2088,9 @@ class SessionDB:
                     "      SELECT ended_at FROM sessions "
                     "      WHERE id = ? AND end_reason = 'compression'"
                     "  ) "
+                    f"{source_clause} "
                     "ORDER BY started_at DESC LIMIT 1",
-                    (current, current),
+                    params,
                 )
                 row = cursor.fetchone()
             if row is None:

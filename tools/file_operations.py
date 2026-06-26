@@ -701,7 +701,7 @@ def normalize_read_pagination(offset: Any = DEFAULT_READ_OFFSET,
     cannot leak into sed ranges like ``0,-1p``.
 
     The upper bound on ``limit`` comes from ``tool_output.max_lines`` in
-    config.yaml (defaults to the module-level ``MAX_LINES`` constant).
+    config.yaml (default 800).
     """
     from tools.tool_output_limits import get_max_lines
     max_lines = get_max_lines()
@@ -1006,7 +1006,7 @@ class ShellFileOperations(FileOperations):
         Args:
             path: File path (absolute or relative to cwd)
             offset: Line number to start from (1-indexed, default 1)
-            limit: Maximum lines to return (default 500, max 2000)
+            limit: Maximum lines to return (default 500, capped by tool_output.max_lines)
         
         Returns:
             ReadResult with content, metadata, or error info

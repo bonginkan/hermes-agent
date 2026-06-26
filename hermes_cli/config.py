@@ -1220,16 +1220,16 @@ DEFAULT_CONFIG = {
     # shot. Ported from anomalyco/opencode PR #23770.
     #
     # - max_bytes:       terminal_tool output cap, in chars
-    #                    (default 50_000 ≈ 12-15K tokens).
+    #                    (default 12_000; full large outputs are artifacts).
     # - max_lines:       read_file pagination cap — the maximum `limit`
     #                    a single read_file call can request before
-    #                    being clamped (default 2000).
+    #                    being clamped (default 800).
     # - max_line_length: per-line cap applied when read_file emits a
-    #                    line-numbered view (default 2000 chars).
+    #                    line-numbered view (default 1200 chars).
     "tool_output": {
-        "max_bytes": 50_000,
-        "max_lines": 2000,
-        "max_line_length": 2000,
+        "max_bytes": 12_000,
+        "max_lines": 800,
+        "max_line_length": 1200,
     },
 
     # Tool loop guardrails nudge models when they repeat failed or
@@ -1252,7 +1252,11 @@ DEFAULT_CONFIG = {
 
     "compression": {
         "enabled": True,
-        "threshold": 0.50,            # compress when context usage exceeds this ratio
+        "threshold": 0.50,            # legacy/proactive compression trigger ratio for
+                                      # providers that use threshold-based Hermes
+                                      # compaction. Codex native-first sessions skip
+                                      # threshold compaction and use Hermes only after
+                                      # provider overflow.
         "target_ratio": 0.20,         # fraction of threshold to preserve as recent tail
         "protect_last_n": 20,         # minimum recent messages to keep uncompressed
         "hygiene_hard_message_limit": 400,  # gateway session-hygiene force-compress threshold by message count
@@ -1273,16 +1277,21 @@ DEFAULT_CONFIG = {
                                       # Default False matches historical behavior; set to
                                       # True if you'd rather pause than silently lose
                                       # context turns when your aux model is flaky.
-        "codex_gpt55_autoraise": True,  # When True, gpt-5.5 on the ChatGPT Codex OAuth
-                                      # route raises its compaction trigger to 85% (vs the
-                                      # global `threshold` above). Codex hard-caps gpt-5.5
-                                      # at a 272K window, so the default 50% would compact
-                                      # at ~136K and waste half the usable context. Set to
-                                      # False to opt back down to the global threshold
-                                      # (e.g. 0.50) for Codex gpt-5.5 sessions. Only this
-                                      # exact route is affected — gpt-5.5 on OpenAI's
-                                      # direct API, OpenRouter, and Copilot keep the
-                                      # global threshold regardless.
+        "codex_native_first": True,   # For openai-codex sessions, let Codex native
+                                      # context management/compaction see the full
+                                      # request first. Hermes compression remains as a
+                                      # fallback only after a provider 413/context-window
+                                      # overflow. This preserves Codex quality while
+                                      # retaining an emergency recovery path.
+        "overflow_fallback_max_attempts": "auto",  # Max Hermes compression retries after a
+                                      # hard provider overflow. "auto" means one
+                                      # safety-valve attempt for Codex native-first,
+                                      # historical retry behavior for other providers.
+        "codex_gpt55_autoraise": True,  # Legacy threshold mode: when True and
+                                      # codex_native_first is False, gpt-5.5 on the
+                                      # ChatGPT Codex OAuth route raises its compaction
+                                      # trigger to 85% (vs the global `threshold` above).
+                                      # Ignored while codex_native_first is active.
     },
 
     # Kanban subsystem (orchestrator workers + dispatcher-driven child tasks).

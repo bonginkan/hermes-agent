@@ -1323,6 +1323,42 @@ class SessionStore:
 
         return new_entry
 
+    def redirect_session(self, session_key: str, target_session_id: str) -> Optional[SessionEntry]:
+        """Redirect a session key to an existing canonical session ID.
+
+        This is for automatic lineage repair, such as following a compression
+        continuation before a gateway turn builds context. It deliberately does
+        not end the current DB row or reopen the target: those are user-visible
+        ``/resume`` semantics owned by ``switch_session``.
+        """
+        with self._lock:
+            self._ensure_loaded_locked()
+
+            if session_key not in self._entries:
+                return None
+
+            entry = self._entries[session_key]
+            if entry.session_id == target_session_id:
+                return entry
+
+            entry.session_id = target_session_id
+            entry.updated_at = _now()
+
+            # The previous mapping may have carried prompt/token accounting
+            # from an oversized parent. After redirect, wait for the tip's next
+            # real model usage before driving hygiene decisions from counters.
+            entry.input_tokens = 0
+            entry.output_tokens = 0
+            entry.cache_read_tokens = 0
+            entry.cache_write_tokens = 0
+            entry.total_tokens = 0
+            entry.estimated_cost_usd = 0.0
+            entry.cost_status = "unknown"
+            entry.last_prompt_tokens = 0
+
+            self._save()
+            return entry
+
     def list_sessions(self, active_minutes: Optional[int] = None) -> List[SessionEntry]:
         """List all sessions, optionally filtered by activity."""
         with self._lock:
