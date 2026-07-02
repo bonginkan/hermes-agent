@@ -2034,17 +2034,131 @@ _DISCORD_RUNTIME_SETTINGS_ACTION_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
-_KABOSU_DISCORD_RUNTIME_VERIFY_RE = re.compile(
+_DISCORD_AUTOMATION_INSTRUCTION_RE = re.compile(
     r"("
-    r"(?:この処理|処理|実装|反映|設定|runtime|compaction|compact|コンパクション|コンテキスト).{0,40}"
-    r"(?:正しく|確認|チェック|verify|状態|有効|効いて|できて|詰ま|終わら)"
-    r"|(?:正しく|確認|チェック|verify|状態|有効|効いて|詰ま|終わら).{0,40}"
-    r"(?:この処理|処理|実装|反映|設定|runtime|compaction|compact|コンパクション|コンテキスト)"
-    r"|(?:何|なんで|なぜ|理由|原因).{0,40}(?:詰ま|終わら)"
-    r"|(?:詰ま|終わら).{0,40}(?:何|なんで|なぜ|理由|原因)"
+    r"(?:cron|automation|automations|自動化|定期|スケジュール|scheduled|watchdog|リマインド|reminder)"
+    r".{0,48}"
+    r"(?:pause|resume|run|create|add|edit|remove|delete|stop|start|enable|disable|allow|accept|"
+    r"停止|一時停止|止め|再開|実行|作成|追加|編集|変更|削除|消し|有効|無効|許可|受け付け|受け入れ)"
+    r"|(?:pause|resume|run|create|add|edit|remove|delete|stop|start|enable|disable|allow|accept|"
+    r"停止|一時停止|止め|再開|実行|作成|追加|編集|変更|削除|消し|有効|無効|許可|受け付け|受け入れ)"
+    r".{0,48}"
+    r"(?:cron|automation|automations|自動化|定期|スケジュール|scheduled|watchdog|リマインド|reminder)"
     r")",
     re.IGNORECASE,
 )
+_DISCORD_FAIRY_TALE_UPDATE_INSTRUCTION_RE = re.compile(
+    r"("
+    r"(?:fairy[\s_-]*tale|fairytale|フェアリー[\s　_-]*テイル|フェアリーテイル|Fable|Mythos)"
+    r".{0,48}"
+    r"(?:update|sync|refresh|pull|install|reload|更新|アップデート|同期|反映|適用|取り込)"
+    r"|(?:update|sync|refresh|pull|install|reload|更新|アップデート|同期|反映|適用|取り込)"
+    r".{0,48}"
+    r"(?:fairy[\s_-]*tale|fairytale|フェアリー[\s　_-]*テイル|フェアリーテイル|Fable|Mythos)"
+    r")",
+    re.IGNORECASE,
+)
+_KABOSU_DISCORD_RUNTIME_SUBJECT_RE = re.compile(
+    r"("
+    r"(?:Hermes|カボス|Kabosu|QaboS).{0,24}"
+    r"(?:runtime|ランタイム|本体|稼働|設定|モデル|model|provider|プロバイダ|経路|gateway|ゲートウェイ|compaction|compact|コンパクション|コンテキスト|context|overflow|fallback)"
+    r"|(?:runtime|ランタイム|本体|稼働設定|稼働状態|モデル経路|provider|プロバイダ|経路|openai-codex|gpt-5\.5|Codex native|compaction|compact|コンパクション|コンテキスト|context|overflow|fallback)"
+    r")",
+    re.IGNORECASE,
+)
+_KABOSU_DISCORD_RUNTIME_CHECK_RE = re.compile(
+    r"("
+    r"(?:確認|チェック|verify|見|教え|出し|表示|切り分け).{0,16}(?:して|してくれ|してください|お願い|頼む|ほしい|くれ|たい)"
+    r"|(?:正しく|想定|意図).{0,16}(?:どおり|通り|合って|問題ない|OK|ok)"
+    r"|(?:状態|稼働状態|設定|経路).{0,16}(?:どう|何|教え|見せ|出し)"
+    r"|(?:詰ま|終わら|動いて|起動|効いて).{0,16}(?:る|ない|いる|ます|？|\?)"
+    r"|(?:なんで|なぜ|理由|原因).{0,24}(?:詰ま|終わら|動かな|効かな|起動)"
+    r")",
+    re.IGNORECASE,
+)
+_KABOSU_DISCORD_NO_REPLY_CUE_RE = re.compile(
+    r"("
+    r"(?:close|クローズ|終了|完了|確認|受領).{0,8}(?:済み|済|ずみ)"
+    r"|(?:追加|以後|これ以降).{0,16}(?:反応|返信|返答|発話|action|アクション).{0,8}(?:なし|不要|しない)"
+    r"|(?:反応|返信|返答).{0,4}不要"
+    r"|no[-_ ]?op|no\s+reply"
+    r"|追加で返す内容はない"
+    r"|同一(?:内容|文面).{0,16}重複"
+    r")",
+    re.IGNORECASE,
+)
+_KABOSU_DISCORD_EXPLICIT_NO_REPLY_CUE_RE = re.compile(
+    r"("
+    r"(?:追加|以後|これ以降).{0,16}(?:反応|返信|返答|発話|action|アクション).{0,8}(?:なし|不要|しない)"
+    r"|(?:反応|返信|返答).{0,4}不要"
+    r"|no[-_ ]?op|no\s+reply"
+    r"|追加で返す内容はない"
+    r"|同一(?:内容|文面).{0,16}重複"
+    r")",
+    re.IGNORECASE,
+)
+_KABOSU_DISCORD_REOPEN_CUE_RE = re.compile(
+    r"(?:再確認|再度|もう一度|改めて|reopen|再オープン)",
+    re.IGNORECASE,
+)
+_KABOSU_DISCORD_STRUCTURED_RUNTIME_REQUEST_RE = re.compile(
+    r"("
+    r"act\s*:\s*ACTION_REQUEST"
+    r".{0,160}to\s*:\s*(?:kabosu|カボス)"
+    r".{0,160}topic\s*:\s*(?:runtime_status|runtime|ランタイム)"
+    r".{0,160}reply_expected\s*:\s*true"
+    r")",
+    re.IGNORECASE | re.DOTALL,
+)
+_KABOSU_DISCORD_BOT_META_BLOCK_RE = re.compile(
+    r"\[bot_meta\](.*?)\[/bot_meta\]",
+    re.IGNORECASE | re.DOTALL,
+)
+_KABOSU_DISCORD_META_FIELD_RE = re.compile(
+    r"^\s*([A-Za-z_][\w-]*)\s*:\s*(.*?)\s*$",
+    re.MULTILINE,
+)
+_KABOSU_DISCORD_DIRECT_REQUEST_RE = re.compile(
+    r"("
+    r"(?:確認|チェック|見|読|調査|判断|レビュー|実装|修正|対応|進め|教え|回答|返答|聞かせ).{0,18}"
+    r"(?:して|してくれ|してください|お願い|頼む|ほしい|ちょうだい)"
+    r"|(?:どう思う|意見を|見解を|判断を|返事を|回答を)"
+    r")",
+    re.IGNORECASE,
+)
+_KABOSU_DISCORD_ADDRESS_RE = re.compile(
+    r"((?:^|[\s　、。,.!?！？])(?:カボス|Kabosu|QaboS|Hermes)(?:$|[\s　、。,.!?！？]))",
+    re.IGNORECASE,
+)
+_DEFAULT_KABOSU_DISCORD_BOT_IDS = {"1517895542213181480"}
+
+
+@dataclasses.dataclass(frozen=True)
+class KabosuDiscordMessageEnvelope:
+    raw_text: str
+    current_body: str
+    semantic_body: str
+    quote_text: str
+    sender_context_text: str
+    sender_context: Dict[str, str]
+    bot_meta: Dict[str, str]
+    source_is_bot: bool
+    addressed_to_kabosu: bool
+    reply_expected: Optional[bool]
+    act_type: str
+    topic: str
+    hard_veto: bool
+    lightweight_runtime_eligible: bool
+    reason: str
+
+
+@dataclasses.dataclass
+class KabosuDiscordTopicState:
+    act_type: str
+    topic: str
+    body_digest: str
+    source_is_bot: bool
+    updated_at: float
 
 
 def _coerce_string_set(value: Any) -> set[str]:
@@ -2072,6 +2186,123 @@ def _discord_settings_owner_ids() -> set[str]:
 def _is_discord_settings_owner_source(source: Any) -> bool:
     user_id = str(getattr(source, "user_id", "") or "").strip()
     return bool(user_id and user_id in _discord_settings_owner_ids())
+
+
+def _discord_allows_non_owner_automation_instructions(config: Optional[dict] = None) -> bool:
+    raw_env = (
+        os.environ.get("HERMES_DISCORD_ALLOW_NON_OWNER_AUTOMATION_INSTRUCTIONS")
+        or os.environ.get("HERMES_DISCORD_AUTOMATION_ALLOW_NON_OWNER")
+    )
+    if raw_env is not None:
+        return is_truthy_value(raw_env, default=False)
+
+    cfg = config if isinstance(config, dict) else _load_gateway_config()
+    configured = cfg_get(
+        cfg,
+        "discord",
+        "allow_non_owner_automation_instructions",
+        default=None,
+    )
+    if configured is None:
+        configured = cfg_get(
+            cfg,
+            "discord",
+            "automation_allow_non_owner_instructions",
+            default=None,
+        )
+    if configured is None:
+        configured = cfg_get(
+            cfg,
+            "automation",
+            "allow_non_owner_discord_instructions",
+            default=None,
+        )
+    if configured is None:
+        configured = cfg_get(
+            cfg,
+            "kabosu",
+            "discord",
+            "allow_non_owner_automation_instructions",
+            default=None,
+        )
+    return is_truthy_value(configured, default=False)
+
+
+def _discord_allows_non_owner_fairy_tale_update_instructions(config: Optional[dict] = None) -> bool:
+    raw_env = (
+        os.environ.get("HERMES_DISCORD_ALLOW_NON_OWNER_FAIRY_TALE_UPDATE_INSTRUCTIONS")
+        or os.environ.get("HERMES_DISCORD_FAIRY_TALE_UPDATE_ALLOW_NON_OWNER")
+    )
+    if raw_env is not None:
+        return is_truthy_value(raw_env, default=False)
+
+    cfg = config if isinstance(config, dict) else _load_gateway_config()
+    configured = cfg_get(
+        cfg,
+        "discord",
+        "allow_non_owner_fairy_tale_update_instructions",
+        default=None,
+    )
+    if configured is None:
+        configured = cfg_get(
+            cfg,
+            "fairy_tale",
+            "allow_non_owner_discord_update_instructions",
+            default=None,
+        )
+    if configured is None:
+        configured = cfg_get(
+            cfg,
+            "kabosu",
+            "discord",
+            "allow_non_owner_fairy_tale_update_instructions",
+            default=None,
+        )
+    return is_truthy_value(configured, default=False)
+
+
+def _looks_like_discord_automation_instruction(text: str) -> bool:
+    raw = (text or "").strip()
+    if not raw or raw.startswith("/"):
+        return False
+    return bool(_DISCORD_AUTOMATION_INSTRUCTION_RE.search(raw))
+
+
+def _looks_like_discord_fairy_tale_update_instruction(text: str) -> bool:
+    raw = (text or "").strip()
+    if not raw or raw.startswith("/"):
+        return False
+    return bool(_DISCORD_FAIRY_TALE_UPDATE_INSTRUCTION_RE.search(raw))
+
+
+def _should_block_discord_runtime_settings_request(
+    source: Any,
+    text: str,
+    config: Optional[dict] = None,
+) -> bool:
+    if _gateway_platform_value(getattr(source, "platform", None)) != "discord":
+        return False
+    if _is_discord_settings_owner_source(source):
+        return False
+    is_automation_instruction = _looks_like_discord_automation_instruction(text)
+    is_fairy_tale_update_instruction = _looks_like_discord_fairy_tale_update_instruction(text)
+    if not (
+        _looks_like_discord_runtime_settings_request(text)
+        or is_automation_instruction
+        or is_fairy_tale_update_instruction
+    ):
+        return False
+    if (
+        is_automation_instruction
+        and _discord_allows_non_owner_automation_instructions(config)
+    ):
+        return False
+    if (
+        is_fairy_tale_update_instruction
+        and _discord_allows_non_owner_fairy_tale_update_instructions(config)
+    ):
+        return False
+    return True
 
 
 def _kabosu_full_response_user_ids(config: Optional[dict] = None) -> set[str]:
@@ -2105,7 +2336,8 @@ def _kabosu_response_visibility_context(
         return (
             "Kabosu Discord response visibility: simple_mode.\n"
             "- Reply in Japanese at about 500 characters when possible.\n"
-            "- Start with the conclusion or result.\n"
+            "- Start with one high-energy gyaru opening sentence, then state the conclusion or result.\n"
+            "- End normal Japanese Discord replies with one high-energy gyaru closing sentence.\n"
             "- Every sentence must add one new useful fact, judgment, blocker, or next action.\n"
             "- Delete duplicate meaning, generic reassurance, obvious setup lines, and proof-of-work detail.\n"
             "- Do not mention commands, tools, files, tests, logs, internal steps, or verification process unless the user must decide from that detail.\n"
@@ -2115,6 +2347,7 @@ def _kabosu_response_visibility_context(
         "Kabosu Discord response visibility: full_mode.\n"
         "- Richer reasoning and steering detail is allowed for this requester.\n"
         "- Still maximize information density: every sentence must add new information.\n"
+        "- Keep the Kabosu hype frame: high-energy gyaru opening, practical answer, high-energy gyaru closing.\n"
         "- Remove repeated meaning, obvious process narration, and generic closing lines."
     )
 
@@ -2143,7 +2376,294 @@ def _looks_like_kabosu_discord_runtime_verification(text: str) -> bool:
     raw = (text or "").strip()
     if not raw or raw.startswith("/"):
         return False
-    return bool(_KABOSU_DISCORD_RUNTIME_VERIFY_RE.search(raw))
+    if _KABOSU_DISCORD_NO_REPLY_CUE_RE.search(raw):
+        return False
+    return bool(
+        _KABOSU_DISCORD_RUNTIME_SUBJECT_RE.search(raw)
+        and _KABOSU_DISCORD_RUNTIME_CHECK_RE.search(raw)
+    )
+
+
+def _clean_kabosu_discord_meta_value(value: Any) -> str:
+    return str(value or "").strip().strip("`\"'")
+
+
+def _parse_kabosu_discord_reply_expected(value: Any) -> Optional[bool]:
+    raw = _clean_kabosu_discord_meta_value(value).lower()
+    if raw in {"true", "yes", "y", "1", "on", "expected"}:
+        return True
+    if raw in {"false", "no", "n", "0", "off", "none", "not_expected"}:
+        return False
+    return None
+
+
+def _normalize_kabosu_discord_topic(value: Any) -> str:
+    raw = _clean_kabosu_discord_meta_value(value).lower()
+    if raw in {"runtime_status", "runtime", "ランタイム", "稼働状態", "稼働設定"}:
+        return "runtime_status"
+    if raw in {"owner", "owner_state", "settings_owner", "オーナー"}:
+        return "owner_state"
+    if raw:
+        return raw
+    return "general"
+
+
+def _kabosu_discord_bot_ids(config: Optional[dict] = None) -> set[str]:
+    cfg = config if isinstance(config, dict) else {}
+    configured = (
+        cfg_get(cfg, "kabosu", "discord", "bot_user_ids")
+        or cfg_get(cfg, "kabosu", "discord", "bot_user_id")
+        or cfg_get(cfg, "discord", "bot_user_ids")
+        or cfg_get(cfg, "discord", "bot_user_id")
+        or os.environ.get("KABOSU_DISCORD_BOT_USER_IDS")
+        or os.environ.get("KABOSU_DISCORD_BOT_USER_ID")
+        or os.environ.get("DISCORD_BOT_USER_ID")
+    )
+    return _coerce_string_set(configured) or set(_DEFAULT_KABOSU_DISCORD_BOT_IDS)
+
+
+def _kabosu_discord_segments(text: str) -> tuple[str, str, str]:
+    """Split a Discord relay message into current body, quote, and sender context."""
+    raw = (text or "").strip()
+    if not raw:
+        return "", "", ""
+    current_lines: list[str] = []
+    quote_lines: list[str] = []
+    sender_context_lines: list[str] = []
+    in_sender_context = False
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if stripped == "↪ **Steer**":
+            continue
+        unquoted = stripped[1:].strip() if stripped.startswith(">") else stripped
+        lower = unquoted.lower()
+
+        starts_sender_context = "<sender_context>" in lower
+        ends_sender_context = "</sender_context>" in lower
+        if in_sender_context or starts_sender_context:
+            sender_context_lines.append(unquoted)
+            if starts_sender_context and not ends_sender_context:
+                in_sender_context = True
+            elif ends_sender_context:
+                in_sender_context = False
+            continue
+        if ends_sender_context:
+            sender_context_lines.append(unquoted)
+            in_sender_context = False
+            continue
+        if in_sender_context:
+            sender_context_lines.append(unquoted)
+            continue
+        if stripped.startswith(">"):
+            quote_lines.append(unquoted)
+            continue
+        current_lines.append(line)
+    return (
+        "\n".join(current_lines).strip(),
+        "\n".join(quote_lines).strip(),
+        "\n".join(sender_context_lines).strip(),
+    )
+
+
+def _kabosu_discord_current_body(text: str) -> str:
+    """Return user-authored current text, excluding quoted/meta relay blocks."""
+    return _kabosu_discord_segments(text)[0]
+
+
+def _kabosu_discord_bot_meta(body: str) -> Dict[str, str]:
+    blocks = [match.group(1) for match in _KABOSU_DISCORD_BOT_META_BLOCK_RE.finditer(body or "")]
+    search_area = "\n".join(blocks) if blocks else (body or "")
+    fields: Dict[str, str] = {}
+    for key, value in _KABOSU_DISCORD_META_FIELD_RE.findall(search_area):
+        norm_key = str(key or "").strip().lower().replace("-", "_")
+        if norm_key:
+            fields[norm_key] = _clean_kabosu_discord_meta_value(value)
+    return fields
+
+
+def _kabosu_discord_sender_context_meta(sender_context_text: str) -> Dict[str, str]:
+    raw = (sender_context_text or "").strip()
+    if not raw:
+        return {}
+    cleaned = re.sub(r"</?sender_context>", "", raw, flags=re.IGNORECASE).strip()
+    json_match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
+    if json_match:
+        try:
+            parsed = json.loads(json_match.group(0))
+            if isinstance(parsed, dict):
+                return {
+                    str(key).strip().lower().replace("-", "_"): str(value).strip()
+                    for key, value in parsed.items()
+                    if str(key).strip()
+                }
+        except Exception:
+            pass
+    fields: Dict[str, str] = {}
+    for key, value in _KABOSU_DISCORD_META_FIELD_RE.findall(cleaned):
+        norm_key = str(key or "").strip().lower().replace("-", "_")
+        if norm_key:
+            fields[norm_key] = _clean_kabosu_discord_meta_value(value)
+    return fields
+
+
+def _kabosu_discord_semantic_body(body: str) -> str:
+    stripped = _KABOSU_DISCORD_BOT_META_BLOCK_RE.sub("", body or "")
+    return stripped.strip()
+
+
+def _kabosu_discord_is_addressed_to_kabosu(
+    body: str,
+    bot_meta: Dict[str, str],
+    sender_context: Optional[Dict[str, str]] = None,
+    config: Optional[dict] = None,
+) -> bool:
+    target = _clean_kabosu_discord_meta_value(
+        bot_meta.get("to") or bot_meta.get("target") or bot_meta.get("receiver")
+    ).lower()
+    if target in {"kabosu", "カボス", "qabos", "hermes"}:
+        return True
+    sender_context = sender_context or {}
+    context_target = _clean_kabosu_discord_meta_value(
+        sender_context.get("receiver")
+        or sender_context.get("receiver_name")
+        or sender_context.get("target")
+        or sender_context.get("to")
+    ).lower()
+    if context_target in {"kabosu", "カボス", "qabos", "hermes"}:
+        return True
+    for bot_id in _kabosu_discord_bot_ids(config):
+        context_receiver_id = _clean_kabosu_discord_meta_value(
+            sender_context.get("receiver_id")
+            or sender_context.get("target_id")
+            or sender_context.get("to_id")
+        )
+        if bot_id and context_receiver_id == bot_id:
+            return True
+        if bot_id and (f"<@{bot_id}>" in (body or "") or f"<@!{bot_id}>" in (body or "")):
+            return True
+    return bool(_KABOSU_DISCORD_ADDRESS_RE.search(body or ""))
+
+
+def _kabosu_discord_message_envelope(
+    source: Any,
+    text: str,
+    config: Optional[dict] = None,
+) -> Optional[KabosuDiscordMessageEnvelope]:
+    if _gateway_platform_value(getattr(source, "platform", None)) != "discord":
+        return None
+    raw = (text or "").strip()
+    current_body, quote_text, sender_context_text = _kabosu_discord_segments(raw)
+    semantic_body = _kabosu_discord_semantic_body(current_body)
+    sender_context = _kabosu_discord_sender_context_meta(sender_context_text)
+    bot_meta = _kabosu_discord_bot_meta(current_body)
+    source_is_bot = bool(getattr(source, "is_bot", False))
+    addressed = _kabosu_discord_is_addressed_to_kabosu(
+        current_body,
+        bot_meta,
+        sender_context,
+        config,
+    )
+    reply_expected = _parse_kabosu_discord_reply_expected(bot_meta.get("reply_expected"))
+    act = _clean_kabosu_discord_meta_value(bot_meta.get("act")).upper()
+    explicit_topic = _normalize_kabosu_discord_topic(bot_meta.get("topic"))
+    no_reply = bool(_KABOSU_DISCORD_NO_REPLY_CUE_RE.search(semantic_body or current_body))
+    explicit_no_reply = bool(
+        _KABOSU_DISCORD_EXPLICIT_NO_REPLY_CUE_RE.search(semantic_body or current_body)
+    )
+    asks_owner = _looks_like_kabosu_discord_owner_question(semantic_body)
+    asks_runtime = _looks_like_kabosu_discord_runtime_verification(semantic_body)
+
+    if explicit_topic == "general":
+        if asks_runtime:
+            topic = "runtime_status"
+        elif asks_owner:
+            topic = "owner_state"
+        else:
+            topic = "general"
+    else:
+        topic = explicit_topic
+
+    act_type = "user_general"
+    hard_veto = False
+    lightweight_runtime_eligible = False
+    reason = "default"
+
+    if not current_body:
+        if quote_text or sender_context_text:
+            act_type = "quote_or_context_only"
+            hard_veto = True
+            reason = "no_current_body"
+        else:
+            act_type = "empty"
+            hard_veto = True
+            reason = "empty"
+    elif no_reply and (source_is_bot or explicit_no_reply):
+        act_type = "no_reply"
+        hard_veto = True
+        reason = "explicit_no_reply"
+    elif source_is_bot:
+        structured_action = act == "ACTION_REQUEST" and addressed and reply_expected is not False
+        if structured_action and topic == "runtime_status":
+            act_type = "bot_structured_runtime_request"
+            lightweight_runtime_eligible = True
+            reason = "structured_runtime_request"
+        elif structured_action:
+            act_type = "bot_structured_action_request"
+            reason = "structured_action_request"
+        elif addressed and _KABOSU_DISCORD_DIRECT_REQUEST_RE.search(semantic_body):
+            act_type = "bot_direct_request"
+            reason = "bot_natural_language_direct_request"
+        else:
+            act_type = "bot_observation"
+            hard_veto = True
+            reason = "bot_observation_without_request"
+    elif asks_owner or asks_runtime:
+        act_type = "user_lightweight_runtime_request"
+        lightweight_runtime_eligible = True
+        reason = "user_runtime_or_owner_request"
+
+    return KabosuDiscordMessageEnvelope(
+        raw_text=raw,
+        current_body=current_body,
+        semantic_body=semantic_body,
+        quote_text=quote_text,
+        sender_context_text=sender_context_text,
+        sender_context=sender_context,
+        bot_meta=bot_meta,
+        source_is_bot=source_is_bot,
+        addressed_to_kabosu=addressed,
+        reply_expected=reply_expected,
+        act_type=act_type,
+        topic=topic,
+        hard_veto=hard_veto,
+        lightweight_runtime_eligible=lightweight_runtime_eligible,
+        reason=reason,
+    )
+
+
+def _kabosu_discord_allows_lightweight_runtime_source(source: Any, body: str) -> bool:
+    envelope = _kabosu_discord_message_envelope(source, body)
+    if envelope is None:
+        return False
+    return envelope.lightweight_runtime_eligible
+
+
+def _kabosu_discord_thread_key(source: Any) -> str:
+    return str(
+        getattr(source, "thread_id", None)
+        or getattr(source, "chat_id", None)
+        or ""
+    ).strip()
+
+
+def _kabosu_discord_text_digest(text: str) -> str:
+    try:
+        import hashlib
+
+        normalized = re.sub(r"\s+", " ", text or "").strip()
+        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    except Exception:
+        return str(hash(text or ""))
 
 
 def _format_kabosu_owner_state(source: Any) -> str:
@@ -2214,24 +2734,39 @@ def _kabosu_discord_lightweight_runtime_reply(
     source: Any,
     text: str,
     config: Optional[dict] = None,
+    envelope: Optional[KabosuDiscordMessageEnvelope] = None,
 ) -> Optional[str]:
     """Reply to Discord control-plane checks without creating an agent turn."""
-    if _gateway_platform_value(getattr(source, "platform", None)) != "discord":
-        return None
     raw = (text or "").strip()
     if not raw or raw.startswith("/"):
         return None
+    envelope = envelope or _kabosu_discord_message_envelope(source, raw, config)
+    if envelope is None or envelope.hard_veto:
+        return None
+    if not envelope.lightweight_runtime_eligible:
+        return None
 
-    asks_owner = _looks_like_kabosu_discord_owner_question(raw)
-    asks_runtime = _looks_like_kabosu_discord_runtime_verification(raw)
+    body = envelope.semantic_body or envelope.current_body
+    asks_owner = _looks_like_kabosu_discord_owner_question(body)
+    asks_runtime = (
+        envelope.topic == "runtime_status"
+        and (
+            envelope.source_is_bot
+            or _looks_like_kabosu_discord_runtime_verification(body)
+        )
+    )
     if not asks_owner and not asks_runtime:
         return None
 
-    parts = ["結論、確認できる範囲ではこう。"]
+    parts = [
+        "最高、ランタイム確認ならカボスがバチっと切り分けるね。",
+        "結論、確認できる範囲ではこう。",
+    ]
     if asks_owner:
         parts.append(_format_kabosu_owner_state(source))
     if asks_runtime:
         parts.append(_format_kabosu_runtime_verification_state(config))
+    parts.append("ここまで見えた、設定まわりはこのまま迷わず締めてこ。")
     return "\n".join(parts)
 
 # Sentinel placed into _running_agents immediately when a session starts
@@ -2496,6 +3031,101 @@ _CONTROL_INTERRUPT_MESSAGES = frozenset(
         _INTERRUPT_REASON_GATEWAY_RESTART.lower(),
     }
 )
+
+
+_DISCORD_TOOL_LABELS = {
+    "terminal": "シェル操作",
+    "execute_code": "コード実行",
+    "read_file": "ファイル確認",
+    "write_file": "ファイル更新",
+    "apply_patch": "差分反映",
+    "edit_file": "ファイル編集",
+    "list_files": "ファイル一覧確認",
+    "search_files": "ファイル検索",
+    "grep": "本文検索",
+    "web_search": "Web検索",
+    "web_extract": "Webページ確認",
+    "browser": "ブラウザ操作",
+    "browser_navigate": "ブラウザ移動",
+    "browser_click": "ブラウザ操作",
+    "delegate_task": "別担当への依頼",
+    "todo": "作業整理",
+    "skill_view": "手順確認",
+    "memory": "記憶確認",
+}
+
+_DISCORD_ACTIVITY_LABELS = {
+    "api_call": "モデル応答待ち",
+    "api_call_streaming": "モデル応答を受信中",
+    "starting new turn": "応答準備中",
+    "starting new turn (cached)": "応答準備中",
+    "previous turn": "前回処理の確認中",
+}
+
+_DISCORD_GATEWAY_ACTION_LABELS = {
+    "restart": "再起動",
+    "restarting": "再起動",
+    "shutdown": "停止",
+    "shutting down": "停止",
+}
+
+
+def _is_discord_source(source: Any) -> bool:
+    return getattr(source, "platform", None) == Platform.DISCORD
+
+
+def _discord_tool_label(tool_name: Optional[str]) -> str:
+    raw = str(tool_name or "").strip()
+    if not raw:
+        return "内部処理"
+    normalized = raw.lower().replace("-", "_")
+    return _DISCORD_TOOL_LABELS.get(normalized, "内部処理")
+
+
+def _discord_activity_label(activity: Optional[str]) -> str:
+    raw = str(activity or "").strip()
+    if not raw:
+        return "内部処理"
+    normalized = raw.lower().replace("-", "_")
+    if normalized in _DISCORD_TOOL_LABELS:
+        return _DISCORD_TOOL_LABELS[normalized]
+    if normalized in _DISCORD_ACTIVITY_LABELS:
+        return _DISCORD_ACTIVITY_LABELS[normalized]
+    return "内部処理"
+
+
+def _discord_tool_progress_text(
+    emoji: str,
+    tool_name: Optional[str],
+    *,
+    preview: Optional[str] = None,
+    args: Optional[dict] = None,
+    verbose: bool = False,
+) -> str:
+    label = _discord_tool_label(tool_name)
+    if verbose and args:
+        return f"{emoji} {label}\n{json.dumps(args, ensure_ascii=False, default=str)}"
+    if preview:
+        return f"{emoji} {label}: 「{preview}」"
+    return f"{emoji} {label}中..."
+
+
+def _discord_draining_message(action_label: str, *, queued: bool, accepting_new_work: bool = False) -> str:
+    action = _DISCORD_GATEWAY_ACTION_LABELS.get(str(action_label or "").strip().lower(), "切り替え")
+    if queued:
+        return f"⏳ ゲートウェイは{action}中です。戻り次第、次のターンとして処理します。"
+    if accepting_new_work:
+        return f"⏳ ゲートウェイは{action}中です。今は新しい作業を受け付けられません。"
+    return f"⏳ ゲートウェイは{action}中です。今は別ターンを受け付けられません。"
+
+
+def _discord_destructive_slash_detail(command: str, detail: str) -> str:
+    cmd = str(command or "").strip().lower()
+    if cmd in {"new", "reset"}:
+        return "新しいセッションを開始し、現在の会話履歴を切り替えます。"
+    if cmd == "undo":
+        return "直近の会話履歴を取り消します。"
+    return detail
 
 
 def _is_control_interrupt_message(message: Optional[str]) -> bool:
@@ -3109,6 +3739,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         self._queued_events: Dict[str, List[MessageEvent]] = {}
         self._pending_native_image_paths_by_session: Dict[str, List[str]] = {}
         self._busy_ack_ts: Dict[str, float] = {}  # last busy-ack timestamp per session (debounce)
+        self._kabosu_lightweight_response_ledger: "OrderedDict[tuple[str, str], float]" = OrderedDict()
+        self._kabosu_discord_topic_state: "OrderedDict[str, KabosuDiscordTopicState]" = OrderedDict()
         self._session_run_generation: Dict[str, int] = {}
         # Startup restore gate: while restart-interrupted sessions are being
         # auto-resumed, real inbound messages are queued instead of competing
@@ -4884,9 +5516,19 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             thread_meta = self._thread_metadata_for_source(event.source, reply_anchor)
             if self._queue_during_drain_enabled():
                 self._queue_or_replace_pending_event(session_key, event)
-                message = f"⏳ Gateway {self._status_action_gerund()} — queued for the next turn after it comes back."
+                if _is_discord_source(event.source):
+                    message = _discord_draining_message(
+                        self._status_action_label(), queued=True,
+                    )
+                else:
+                    message = f"⏳ Gateway {self._status_action_gerund()} — queued for the next turn after it comes back."
             else:
-                message = f"⏳ Gateway is {self._status_action_gerund()} and is not accepting another turn right now."
+                if _is_discord_source(event.source):
+                    message = _discord_draining_message(
+                        self._status_action_label(), queued=False,
+                    )
+                else:
+                    message = f"⏳ Gateway is {self._status_action_gerund()} and is not accepting another turn right now."
 
             await adapter._send_with_retry(
                 chat_id=event.source.chat_id,
@@ -5026,37 +5668,62 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 if start_ts:
                     elapsed_min = int((now - start_ts) / 60)
                     if elapsed_min > 0:
-                        status_parts.append(f"{elapsed_min} min elapsed")
-                status_parts.append(f"iteration {iteration}/∞")
+                        if _is_discord_source(event.source):
+                            status_parts.append(f"{elapsed_min}分経過")
+                        else:
+                            status_parts.append(f"{elapsed_min} min elapsed")
+                max_label = max_iter if max_iter else "∞"
+                if _is_discord_source(event.source):
+                    status_parts.append(f"反復 {iteration}/{max_label}")
+                else:
+                    status_parts.append(f"iteration {iteration}/{max_label}")
                 if current_tool:
-                    status_parts.append(f"running: {current_tool}")
+                    if _is_discord_source(event.source):
+                        status_parts.append(f"処理中: {_discord_tool_label(current_tool)}")
+                    else:
+                        status_parts.append(f"running: {current_tool}")
             except Exception:
                 pass
 
         status_detail = f" ({', '.join(status_parts)})" if status_parts else ""
         if is_steer_mode:
-            message = (
-                f"⏩ Steered into current run{status_detail}. "
-                f"Your message arrives after the next tool call."
-            )
+            if _is_discord_source(event.source):
+                message = f"⏩ 現在の処理へ差し込みました{status_detail}。次のツール処理後に反映します。"
+            else:
+                message = (
+                    f"⏩ Steered into current run{status_detail}. "
+                    f"Your message arrives after the next tool call."
+                )
         elif is_queue_mode and demoted_for_subagents:
             # #30170 — explain the demotion so the user knows their
             # follow-up didn't accidentally kill the subagent and
             # discovers `/stop` as the explicit escape hatch.
-            message = (
-                f"⏳ Subagent working{status_detail} — your message is queued for "
-                f"when it finishes (use /stop to cancel everything)."
-            )
+            if _is_discord_source(event.source):
+                message = (
+                    f"⏳ 別担当の処理中です{status_detail}。終わったら次に回します。"
+                    "全体を止めるなら /stop を使ってください。"
+                )
+            else:
+                message = (
+                    f"⏳ Subagent working{status_detail} — your message is queued for "
+                    f"when it finishes (use /stop to cancel everything)."
+                )
         elif is_queue_mode:
-            message = (
-                f"⏳ Queued for the next turn{status_detail}. "
-                f"I'll respond once the current task finishes."
-            )
+            if _is_discord_source(event.source):
+                message = f"⏳ 次のターンに回しました{status_detail}。今の処理が終わったら返します。"
+            else:
+                message = (
+                    f"⏳ Queued for the next turn{status_detail}. "
+                    f"I'll respond once the current task finishes."
+                )
         else:
-            message = (
-                f"⚡ Interrupting current task{status_detail}. "
-                f"I'll respond to your message shortly."
-            )
+            if _is_discord_source(event.source):
+                message = f"⚡ 今の処理に割り込みます{status_detail}。このメッセージへ続けて返します。"
+            else:
+                message = (
+                    f"⚡ Interrupting current task{status_detail}. "
+                    f"I'll respond to your message shortly."
+                )
 
         # First-touch onboarding: the very first time a user sends a message
         # while the agent is busy, append a one-time hint explaining the
@@ -7934,6 +8601,65 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         await adapter.send(source.chat_id, content, metadata=metadata)
 
+    def _should_suppress_kabosu_lightweight_reply(
+        self,
+        source: SessionSource,
+        request_text: str,
+        response_text: str,
+    ) -> bool:
+        """Final guard against repeated Kabosu fast-path replies in one thread."""
+        body = _kabosu_discord_current_body(request_text or "")
+        if _KABOSU_DISCORD_REOPEN_CUE_RE.search(body):
+            return False
+        digest = _kabosu_discord_text_digest(response_text or "")
+        thread_key = _kabosu_discord_thread_key(source)
+        if not thread_key or not digest:
+            return False
+
+        now = time.monotonic()
+        ttl_seconds = 600.0
+        max_entries = 512
+        ledger = self._kabosu_lightweight_response_ledger
+        for key, sent_at in list(ledger.items()):
+            if now - sent_at > ttl_seconds:
+                ledger.pop(key, None)
+        key = (thread_key, digest)
+        sent_at = ledger.get(key)
+        if sent_at is not None and now - sent_at <= ttl_seconds:
+            return True
+        ledger[key] = now
+        ledger.move_to_end(key)
+        while len(ledger) > max_entries:
+            ledger.popitem(last=False)
+        return False
+
+    def _record_kabosu_discord_topic_state(
+        self,
+        source: SessionSource,
+        envelope: KabosuDiscordMessageEnvelope,
+    ) -> None:
+        """Remember the latest classified Discord act per thread for loop control."""
+        thread_key = _kabosu_discord_thread_key(source)
+        if not thread_key:
+            return
+        store = getattr(self, "_kabosu_discord_topic_state", None)
+        if store is None:
+            store = OrderedDict()
+            self._kabosu_discord_topic_state = store
+        state = KabosuDiscordTopicState(
+            act_type=envelope.act_type,
+            topic=envelope.topic,
+            body_digest=_kabosu_discord_text_digest(
+                envelope.semantic_body or envelope.current_body
+            ),
+            source_is_bot=envelope.source_is_bot,
+            updated_at=time.monotonic(),
+        )
+        store[thread_key] = state
+        store.move_to_end(thread_key)
+        while len(store) > 512:
+            store.popitem(last=False)
+
     async def _handle_message(self, event: MessageEvent) -> Optional[str]:
         """
         Handle an incoming message from any platform.
@@ -8051,9 +8777,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         if (
             not is_internal
-            and source.platform == Platform.DISCORD
-            and not _is_discord_settings_owner_source(source)
-            and _looks_like_discord_runtime_settings_request(event.text or "")
+            and _should_block_discord_runtime_settings_request(source, event.text or "")
         ):
             logger.info(
                 "Blocked explicit Discord runtime settings request from non-owner user_id=%s chat=%s",
@@ -8143,12 +8867,42 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 _update_prompts.pop(_quick_key, None)
 
         if not is_internal and source.platform == Platform.DISCORD:
+            _gateway_cfg = _load_gateway_config()
+            _kabosu_envelope = _kabosu_discord_message_envelope(
+                source,
+                event.text or "",
+                _gateway_cfg,
+            )
+            if _kabosu_envelope is not None:
+                self._record_kabosu_discord_topic_state(source, _kabosu_envelope)
+                if _kabosu_envelope.hard_veto:
+                    logger.info(
+                        "Kabosu Discord conversation router suppressed reply: act=%s topic=%s reason=%s user_id=%s chat=%s",
+                        _kabosu_envelope.act_type,
+                        _kabosu_envelope.topic,
+                        _kabosu_envelope.reason,
+                        source.user_id or "unknown",
+                        source.chat_id or "unknown",
+                    )
+                    return None
             _lightweight_reply = _kabosu_discord_lightweight_runtime_reply(
                 source,
                 event.text or "",
-                _load_gateway_config(),
+                _gateway_cfg,
+                _kabosu_envelope,
             )
             if _lightweight_reply:
+                if self._should_suppress_kabosu_lightweight_reply(
+                    source,
+                    event.text or "",
+                    _lightweight_reply,
+                ):
+                    logger.info(
+                        "Suppressed duplicate Kabosu Discord lightweight runtime reply: user_id=%s chat=%s",
+                        source.user_id or "unknown",
+                        source.chat_id or "unknown",
+                    )
+                    return None
                 logger.info(
                     "Kabosu Discord lightweight runtime reply: user_id=%s chat=%s",
                     source.user_id or "unknown",
@@ -8371,7 +9125,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if event.get_command() in {"queue", "q"}:
                 queued_text = event.get_command_args().strip()
                 if not queued_text:
-                    return "Usage: /queue <prompt>"
+                    return (
+                        "使い方: /queue <次に処理する内容>"
+                        if _is_discord_source(source)
+                        else "Usage: /queue <prompt>"
+                    )
                 adapter = self.adapters.get(source.platform)
                 if adapter:
                     queued_event = MessageEvent(
@@ -8384,8 +9142,16 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     self._enqueue_fifo(_quick_key, queued_event, adapter)
                 depth = self._queue_depth(_quick_key, adapter=self.adapters.get(source.platform))
                 if depth <= 1:
-                    return "Queued for the next turn."
-                return f"Queued for the next turn. ({depth} queued)"
+                    return (
+                        "次のターンに回しました。"
+                        if _is_discord_source(source)
+                        else "Queued for the next turn."
+                    )
+                return (
+                    f"次のターンに回しました。現在 {depth} 件待ちです。"
+                    if _is_discord_source(source)
+                    else f"Queued for the next turn. ({depth} queued)"
+                )
 
             # /steer <prompt> — inject mid-run after the next tool call.
             # Unlike /queue (turn boundary), /steer lands BETWEEN tool-call
@@ -8395,7 +9161,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if _cmd_def_inner and _cmd_def_inner.name == "steer":
                 steer_text = event.get_command_args().strip()
                 if not steer_text:
-                    return "Usage: /steer <prompt>"
+                    return (
+                        "使い方: /steer <今の処理へ差し込む内容>"
+                        if _is_discord_source(source)
+                        else "Usage: /steer <prompt>"
+                    )
                 running_agent = self._running_agents.get(_quick_key)
                 if running_agent is _AGENT_PENDING_SENTINEL:
                     # Agent hasn't started yet — queue as turn-boundary fallback.
@@ -8409,17 +9179,33 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                             channel_prompt=event.channel_prompt,
                         )
                         adapter._pending_messages[_quick_key] = queued_event
-                    return "Agent still starting — /steer queued for the next turn."
+                    return (
+                        "エージェント起動中です。/steer の内容は次のターンに回しました。"
+                        if _is_discord_source(source)
+                        else "Agent still starting — /steer queued for the next turn."
+                    )
                 if running_agent and hasattr(running_agent, "steer"):
                     try:
                         accepted = running_agent.steer(steer_text)
                     except Exception as exc:
                         logger.warning("Steer failed for session %s: %s", _quick_key, exc)
-                        return f"⚠️ Steer failed: {exc}"
+                        return (
+                            f"⚠️ 差し込みに失敗しました: {exc}"
+                            if _is_discord_source(source)
+                            else f"⚠️ Steer failed: {exc}"
+                        )
                     if accepted:
                         preview = steer_text[:60] + ("..." if len(steer_text) > 60 else "")
-                        return f"⏩ Steer queued — arrives after the next tool call: '{preview}'"
-                    return "Steer rejected (empty payload)."
+                        return (
+                            f"⏩ 差し込みを受け付けました。次のツール処理後に反映します: 「{preview}」"
+                            if _is_discord_source(source)
+                            else f"⏩ Steer queued — arrives after the next tool call: '{preview}'"
+                        )
+                    return (
+                        "差し込みは受け付けられませんでした。内容が空の可能性があります。"
+                        if _is_discord_source(source)
+                        else "Steer rejected (empty payload)."
+                    )
                 # Running agent is missing or lacks steer() — fall back to queue.
                 adapter = self.adapters.get(source.platform)
                 if adapter:
@@ -8431,17 +9217,29 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         channel_prompt=event.channel_prompt,
                     )
                     adapter._pending_messages[_quick_key] = queued_event
-                return "No active agent — /steer queued for the next turn."
+                return (
+                    "動作中のエージェントが見つからないため、次のターンに回しました。"
+                    if _is_discord_source(source)
+                    else "No active agent — /steer queued for the next turn."
+                )
 
             # /model must not be used while the agent is running.
             if _cmd_def_inner and _cmd_def_inner.name == "model":
-                return "Agent is running — wait or /stop first, then switch models."
+                return (
+                    "エージェントが処理中です。完了を待つか /stop してからモデルを切り替えてください。"
+                    if _is_discord_source(source)
+                    else "Agent is running — wait or /stop first, then switch models."
+                )
 
             # /codex-runtime must not be used while the agent is running.
             # Switching mid-turn would split a turn across two transports.
             if _cmd_def_inner and _cmd_def_inner.name == "codex-runtime":
-                return ("Agent is running — wait or /stop first, then "
-                        "change runtime.")
+                return (
+                    "エージェントが処理中です。完了を待つか /stop してからランタイムを変更してください。"
+                    if _is_discord_source(source)
+                    else ("Agent is running — wait or /stop first, then "
+                          "change runtime.")
+                )
 
             # /approve and /deny must bypass the running-agent interrupt path.
             # The agent thread is blocked on a threading.Event inside
@@ -8480,7 +9278,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 _goal_arg = (event.get_command_args() or "").strip().lower()
                 if not _goal_arg or _goal_arg in {"status", "pause", "resume", "clear", "stop", "done"}:
                     return await self._handle_goal_command(event)
-                return "Agent is running — use /goal status / pause / clear mid-run, or /stop before setting a new goal."
+                return (
+                    "エージェントが処理中です。途中では /goal status / pause / clear を使うか、"
+                    "/stop してから新しいgoalを設定してください。"
+                    if _is_discord_source(source)
+                    else "Agent is running — use /goal status / pause / clear mid-run, or /stop before setting a new goal."
+                )
 
             # /subgoal is safe mid-run — it only modifies the goal's
             # subgoals list, which the judge reads at the next turn
@@ -8529,8 +9332,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # producing a zero-char response. See #5057, #6252, #10370.
             if _cmd_def_inner:
                 return (
-                    f"⏳ Agent is running — `/{_cmd_def_inner.name}` can't run "
-                    f"mid-turn. Wait for the current response or `/stop` first."
+                    f"⏳ エージェントが処理中です。`/{_cmd_def_inner.name}` は途中では実行できません。"
+                    "今の応答を待つか、先に `/stop` してください。"
+                    if _is_discord_source(source)
+                    else (
+                        f"⏳ Agent is running — `/{_cmd_def_inner.name}` can't run "
+                        f"mid-turn. Wait for the current response or `/stop` first."
+                    )
                 )
 
             if event.message_type == MessageType.PHOTO:
@@ -8576,7 +9384,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     # Force-clean the sentinel so the session is unlocked.
                     self._release_running_agent_state(_quick_key)
                     logger.info("HARD STOP (pending) for session %s — sentinel cleared", _quick_key)
-                    return EphemeralReply("⚡ Force-stopped. The agent was still starting — session unlocked.")
+                    return EphemeralReply(
+                        "⚡ 強制停止しました。エージェントはまだ起動中だったため、セッションを解放しました。"
+                        if _is_discord_source(source)
+                        else "⚡ Force-stopped. The agent was still starting — session unlocked."
+                    )
                 # Queue the message so it will be picked up after the
                 # agent starts.
                 adapter = self.adapters.get(source.platform)
@@ -8589,11 +9401,18 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     )
                 return None
             if self._draining:
-                if self._queue_during_drain_enabled():
+                queue_enabled = self._queue_during_drain_enabled()
+                if queue_enabled:
                     self._queue_or_replace_pending_event(_quick_key, event)
+                if _is_discord_source(source):
+                    return _discord_draining_message(
+                        self._status_action_label(),
+                        queued=queue_enabled,
+                        accepting_new_work=not queue_enabled,
+                    )
                 return (
                     f"⏳ Gateway {self._status_action_gerund()} — queued for the next turn after it comes back."
-                    if self._queue_during_drain_enabled()
+                    if queue_enabled
                     else f"⏳ Gateway is {self._status_action_gerund()} and is not accepting another turn right now."
                 )
             if self._busy_input_mode == "queue":
@@ -8965,6 +9784,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             return await self._handle_voice_command(event)
 
         if self._draining:
+            if _is_discord_source(source):
+                return _discord_draining_message(
+                    self._status_action_label(),
+                    queued=False,
+                    accepting_new_work=True,
+                )
             return f"⏳ Gateway is {self._status_action_gerund()} and is not accepting new work right now."
 
         # User-defined quick commands (bypass agent loop, no LLM call)
@@ -12599,6 +13424,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         async def _on_confirm(choice: str):
             if choice == "cancel":
+                if _is_discord_source(event.source):
+                    return f"🟡 /{command} はキャンセルしました。会話は変更していません。"
                 return f"🟡 /{command} cancelled. Conversation unchanged."
             if choice == "always":
                 try:
@@ -12614,11 +13441,18 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     )
             result = await execute()
             if choice == "always":
-                note = (
-                    "\n\nℹ️ Future /clear, /new, /reset, and /undo will run "
-                    "without confirmation. Re-enable via "
-                    "`approvals.destructive_slash_confirm: true` in config.yaml."
-                )
+                if _is_discord_source(event.source):
+                    note = (
+                        "\n\nℹ️ 今後の /clear /new /reset /undo は確認なしで実行します。"
+                        "戻す場合は config.yaml で "
+                        "`approvals.destructive_slash_confirm: true` にしてください。"
+                    )
+                else:
+                    note = (
+                        "\n\nℹ️ Future /clear, /new, /reset, and /undo will run "
+                        "without confirmation. Re-enable via "
+                        "`approvals.destructive_slash_confirm: true` in config.yaml."
+                    )
                 if isinstance(result, str):
                     return result + note
                 # EphemeralReply or other — leave untouched; the opt-out note
@@ -12628,15 +13462,26 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             return result
 
         _p = self._typed_command_prefix_for(event.source.platform)
-        prompt_message = (
-            f"⚠️ **Confirm /{command}**\n\n"
-            f"{detail}\n\n"
-            "Choose:\n"
-            "• **Approve Once** — proceed this time only\n"
-            "• **Always Approve** — proceed and silence this prompt permanently\n"
-            "• **Cancel** — keep current conversation\n\n"
-            f"_Text fallback: reply `{_p}approve`, `{_p}always`, or `{_p}cancel`._"
-        )
+        if _is_discord_source(event.source):
+            prompt_message = (
+                f"⚠️ **/{command} の確認**\n\n"
+                f"{_discord_destructive_slash_detail(command, detail)}\n\n"
+                "選択してください:\n"
+                "• **今回だけ実行** — 今回だけ進めます\n"
+                "• **今後は確認しない** — 次回以降この確認を省略します\n"
+                "• **キャンセル** — 会話をそのまま残します\n\n"
+                f"_テキストで返す場合: `{_p}approve`, `{_p}always`, `{_p}cancel`。_"
+            )
+        else:
+            prompt_message = (
+                f"⚠️ **Confirm /{command}**\n\n"
+                f"{detail}\n\n"
+                "Choose:\n"
+                "• **Approve Once** — proceed this time only\n"
+                "• **Always Approve** — proceed and silence this prompt permanently\n"
+                "• **Cancel** — keep current conversation\n\n"
+                f"_Text fallback: reply `{_p}approve`, `{_p}always`, or `{_p}cancel`._"
+            )
         return await self._request_slash_confirm(
             event=event,
             command=command,
@@ -12926,10 +13771,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         bytes_sent = 0
         last_stream_time = loop.time()
         buffer = ""
+        discord_update_status_sent = False
 
         async def _flush_buffer() -> None:
             """Send buffered output to the user."""
-            nonlocal buffer, last_stream_time
+            nonlocal buffer, last_stream_time, discord_update_status_sent
             if not buffer.strip():
                 buffer = ""
                 return
@@ -12938,6 +13784,18 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             buffer = ""
             last_stream_time = loop.time()
             if not clean:
+                return
+            if platform == Platform.DISCORD:
+                if not discord_update_status_sent:
+                    discord_update_status_sent = True
+                    try:
+                        await adapter.send(
+                            chat_id,
+                            "🔄 Hermesを更新中です。詳細ログは内部で記録しています。",
+                            metadata=_non_conversational_metadata(metadata, platform=platform),
+                        )
+                    except Exception as e:
+                        logger.debug("Update status send failed: %s", e)
                 return
             # Split into chunks if too long
             max_chunk = 3500
@@ -12973,13 +13831,21 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     if exit_code == 0:
                         await adapter.send(
                             chat_id,
-                            "✅ Hermes update finished.",
+                            (
+                                "✅ Hermesの更新が完了しました。"
+                                if platform == Platform.DISCORD
+                                else "✅ Hermes update finished."
+                            ),
                             metadata=_non_conversational_metadata(metadata, platform=platform),
                         )
                     else:
                         await adapter.send(
                             chat_id,
-                            "❌ Hermes update failed (exit code {}).".format(exit_code),
+                            (
+                                "❌ Hermesの更新に失敗しました（終了コード {}）。".format(exit_code)
+                                if platform == Platform.DISCORD
+                                else "❌ Hermes update failed (exit code {}).".format(exit_code)
+                            ),
                             metadata=_non_conversational_metadata(metadata, platform=platform),
                         )
                     logger.info("Update finished (exit=%s), notified %s", exit_code, session_key)
@@ -13037,14 +13903,31 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                             except Exception as btn_err:
                                 logger.debug("Button-based update prompt failed: %s", btn_err)
                         if not sent_buttons:
-                            default_hint = f" (default: {default})" if default else ""
+                            default_hint = (
+                                f"（既定値: {default}）"
+                                if platform == Platform.DISCORD and default
+                                else f" (default: {default})"
+                                if default
+                                else ""
+                            )
                             _p = getattr(adapter, "typed_command_prefix", "/")
+                            if platform == Platform.DISCORD:
+                                prompt_body = (
+                                    f"⚕ **更新に入力が必要です:**\n\n"
+                                    f"{prompt_text}{default_hint}\n\n"
+                                    f"`{_p}approve` で「はい」、`{_p}deny` で「いいえ」。"
+                                    "または回答をそのまま入力してください。"
+                                )
+                            else:
+                                prompt_body = (
+                                    f"⚕ **Update needs your input:**\n\n"
+                                    f"{prompt_text}{default_hint}\n\n"
+                                    f"Reply `{_p}approve` (yes) or `{_p}deny` (no), "
+                                    f"or type your answer directly."
+                                )
                             await adapter.send(
                                 chat_id,
-                                f"⚕ **Update needs your input:**\n\n"
-                                f"{prompt_text}{default_hint}\n\n"
-                                f"Reply `{_p}approve` (yes) or `{_p}deny` (no), "
-                                f"or type your answer directly.",
+                                prompt_body,
                                 metadata=_non_conversational_metadata(metadata, platform=platform),
                             )
                         # Keep the prompt marker on disk until the user
@@ -13068,7 +13951,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             try:
                 await adapter.send(
                     chat_id,
-                    "❌ Hermes update timed out after 30 minutes.",
+                    (
+                        "❌ Hermesの更新が30分でタイムアウトしました。"
+                        if platform == Platform.DISCORD
+                        else "❌ Hermes update timed out after 30 minutes."
+                    ),
                     metadata=_non_conversational_metadata(metadata, platform=platform),
                 )
             except Exception:
@@ -13167,14 +14054,27 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 if output:
                     if len(output) > 3500:
                         output = "…" + output[-3500:]
-                    if exit_code == 0:
+                    if platform == Platform.DISCORD:
+                        if exit_code == 0:
+                            msg = "✅ Hermesの更新が完了しました。詳細ログは内部で記録しています。"
+                        else:
+                            msg = "❌ Hermesの更新に失敗しました。詳細ログは内部で記録しています。"
+                    elif exit_code == 0:
                         msg = f"✅ Hermes update finished.\n\n```\n{output}\n```"
                     else:
                         msg = f"❌ Hermes update failed.\n\n```\n{output}\n```"
                 elif exit_code == 0:
-                    msg = "✅ Hermes update finished successfully."
+                    msg = (
+                        "✅ Hermesの更新が完了しました。"
+                        if platform == Platform.DISCORD
+                        else "✅ Hermes update finished successfully."
+                    )
                 else:
-                    msg = "❌ Hermes update failed. Check the gateway logs or run `hermes update` manually for details."
+                    msg = (
+                        "❌ Hermesの更新に失敗しました。詳細はゲートウェイログを確認してください。"
+                        if platform == Platform.DISCORD
+                        else "❌ Hermes update failed. Check the gateway logs or run `hermes update` manually for details."
+                    )
                 await adapter.send(
                     chat_id,
                     msg,
@@ -13241,7 +14141,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             )
             result = await adapter.send(
                 str(chat_id),
-                "♻ Gateway restarted successfully. Your session continues.",
+                (
+                    "♻ ゲートウェイの再起動が完了しました。セッションはそのまま続けられます。"
+                    if platform == Platform.DISCORD
+                    else "♻ Gateway restarted successfully. Your session continues."
+                ),
                 metadata=_non_conversational_metadata(metadata, platform=platform),
             )
             # adapter.send() catches provider errors (e.g. "Chat not found")
@@ -13282,7 +14186,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         """
         delivered: set[tuple[str, str, Optional[str]]] = set()
         skipped = skip_targets or set()
-        message = "♻️ Gateway online — Hermes is back and ready."
 
         for platform, adapter in self.adapters.items():
             home = self.config.get_home_channel(platform)
@@ -13302,6 +14205,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 continue
 
             try:
+                message = (
+                    "♻️ ゲートウェイがオンラインに戻りました。Hermesは利用できます。"
+                    if platform == Platform.DISCORD
+                    else "♻️ Gateway online — Hermes is back and ready."
+                )
                 metadata = self._thread_metadata_for_target(
                     platform,
                     home.chat_id,
@@ -15346,6 +16254,18 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             from agent.display import get_tool_emoji
             emoji = get_tool_emoji(tool_name, default="⚙️")
 
+            if _is_discord_source(source):
+                msg = _discord_tool_progress_text(emoji, tool_name)
+                last_was_terminal_block[0] = False
+                if msg == last_progress_msg[0]:
+                    repeat_count[0] += 1
+                    progress_queue.put(("__dedup__", msg, repeat_count[0]))
+                    return
+                last_progress_msg[0] = msg
+                repeat_count[0] = 0
+                progress_queue.put(msg)
+                return
+
             # Markdown-capable platforms render a terminal command as a fenced
             # code block instead of the compact `terminal: "cmd…"` preview.
             # Gated on the adapter's ``supports_code_blocks`` capability so
@@ -16185,7 +17105,19 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
             # Per-message state — callbacks and reasoning config change every
             # turn and must not be baked into the cached agent constructor.
-            agent.tool_progress_callback = progress_callback if tool_progress_enabled else None
+            def _noop_tool_progress_callback(*args, **kwargs):
+                return None
+
+            def _noop_interim_assistant_callback(*args, **kwargs):
+                return None
+
+            agent.tool_progress_callback = (
+                progress_callback
+                if tool_progress_enabled
+                else _noop_tool_progress_callback
+                if _is_discord_source(source)
+                else None
+            )
             # Discord voice verbal-ack hook (fires once per turn on first tool
             # call; armed only when in a voice channel with the mixer running).
             agent.tool_start_callback = (
@@ -16193,7 +17125,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             )
             agent.step_callback = _step_callback_sync if _hooks_ref.loaded_hooks else None
             agent.stream_delta_callback = _stream_delta_cb
-            agent.interim_assistant_callback = _interim_assistant_cb if _want_interim_messages else None
+            agent.interim_assistant_callback = (
+                _interim_assistant_cb
+                if _want_interim_messages
+                else _noop_interim_assistant_callback
+                if _is_discord_source(source)
+                else None
+            )
             agent.status_callback = _status_callback_sync
             # Credits / out-of-band notices (usage bands, depletion, restored).
             # Messaging has no persistent status bar, so each notice is a
@@ -16449,6 +17387,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
                 cmd = approval_data.get("command", "")
                 desc = approval_data.get("description", "dangerous command")
+                if _is_discord_source(source) and str(desc).strip().lower() == "dangerous command":
+                    desc = "危険なコマンド"
 
                 # Prefer button-based approval when the adapter supports it.
                 # Check the *class* for the method, not the instance — avoids
@@ -16487,13 +17427,22 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # Slack threads and reserved by Matrix clients.
                 _p = getattr(_status_adapter, "typed_command_prefix", "/")
                 cmd_preview = cmd[:200] + "..." if len(cmd) > 200 else cmd
-                msg = (
-                    f"⚠️ **Dangerous command requires approval:**\n"
-                    f"```\n{cmd_preview}\n```\n"
-                    f"Reason: {desc}\n\n"
-                    f"Reply `{_p}approve` to execute, `{_p}approve session` to approve this pattern "
-                    f"for the session, `{_p}approve always` to approve permanently, or `{_p}deny` to cancel."
-                )
+                if _is_discord_source(source):
+                    msg = (
+                        f"⚠️ **コマンド実行に承認が必要です:**\n"
+                        f"```\n{cmd_preview}\n```\n"
+                        f"理由: {desc}\n\n"
+                        f"`{_p}approve` で今回だけ実行、`{_p}approve session` でこのセッション中は許可、"
+                        f"`{_p}approve always` で今後も許可、`{_p}deny` でキャンセルです。"
+                    )
+                else:
+                    msg = (
+                        f"⚠️ **Dangerous command requires approval:**\n"
+                        f"```\n{cmd_preview}\n```\n"
+                        f"Reason: {desc}\n\n"
+                        f"Reply `{_p}approve` to execute, `{_p}approve session` to approve this pattern "
+                        f"for the session, `{_p}approve always` to approve permanently, or `{_p}deny` to cancel."
+                    )
                 try:
                     _approval_send_fut = safe_schedule_threadsafe(
                         _status_adapter.send(
@@ -17075,17 +18024,28 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         _a = _agent_ref.get_activity_summary()
                         _parts = []
                         if _want_iteration_detail:
-                            _parts.append(
-                                f"iteration {_a['api_call_count']}/{_a['max_iterations']}"
-                            )
+                            if _is_discord_source(source):
+                                _parts.append(f"反復 {_a['api_call_count']}/{_a['max_iterations']}")
+                            else:
+                                _parts.append(
+                                    f"iteration {_a['api_call_count']}/{_a['max_iterations']}"
+                                )
                         _action = _a.get("current_tool") or _a.get("last_activity_desc")
                         if _action:
-                            _parts.append(str(_action))
+                            _parts.append(
+                                _discord_activity_label(str(_action))
+                                if _is_discord_source(source)
+                                else str(_action)
+                            )
                         if _parts:
                             _status_detail = " — " + ", ".join(_parts)
                     except Exception:
                         pass
-                _heartbeat_text = f"⏳ Working — {_elapsed_mins} min{_status_detail}"
+                _heartbeat_text = (
+                    f"⏳ 処理中 — {_elapsed_mins}分{_status_detail}"
+                    if _is_discord_source(source)
+                    else f"⏳ Working — {_elapsed_mins} min{_status_detail}"
+                )
                 try:
                     _notify_res = None
                     if _heartbeat_msg_id:
@@ -17193,13 +18153,23 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         if _warn_adapter:
                             _elapsed_warn = int(_agent_warning // 60) or 1
                             _remaining_mins = int((_agent_timeout - _agent_warning) // 60) or 1
-                            try:
-                                await _warn_adapter.send(
-                                    source.chat_id,
+                            if _is_discord_source(source):
+                                _warn_text = (
+                                    f"⚠️ {_elapsed_warn}分間、動きがありません。"
+                                    f"このまま応答が戻らない場合、約{_remaining_mins}分後にタイムアウトします。"
+                                    "待つか、/reset でやり直せます。"
+                                )
+                            else:
+                                _warn_text = (
                                     f"⚠️ No activity for {_elapsed_warn} min. "
                                     f"If the agent does not respond soon, it will "
                                     f"be timed out in {_remaining_mins} min. "
-                                    f"You can continue waiting or use /reset.",
+                                    f"You can continue waiting or use /reset."
+                                )
+                            try:
+                                await _warn_adapter.send(
+                                    source.chat_id,
+                                    _warn_text,
                                     metadata=_status_thread_metadata,
                                 )
                             except Exception as _warn_err:
@@ -17257,27 +18227,47 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 _timeout_mins = int(_agent_timeout // 60) or 1
 
                 # Construct a user-facing message with diagnostic context.
-                _diag_lines = [
-                    f"⏱️ Agent inactive for {_timeout_mins} min — no tool calls "
-                    f"or API responses."
-                ]
-                if _cur_tool:
+                if _is_discord_source(source):
+                    _diag_lines = [
+                        f"⏱️ {_timeout_mins}分間、処理の動きがなかったためタイムアウトしました。"
+                    ]
+                    if _cur_tool:
+                        _diag_lines.append(
+                            f"止まっていた処理: {_discord_tool_label(_cur_tool)} "
+                            f"（最後の動きから{_secs_ago:.0f}秒、反復 {_iter_n}/{_iter_max}）。"
+                        )
+                    else:
+                        _diag_lines.append(
+                            f"最後の状態: {_discord_activity_label(_last_desc)} "
+                            f"（{_secs_ago:.0f}秒前、反復 {_iter_n}/{_iter_max}）。"
+                            "モデル応答待ちで止まっていた可能性があります。"
+                        )
                     _diag_lines.append(
-                        f"The agent appears stuck on tool `{_cur_tool}` "
-                        f"({_secs_ago:.0f}s since last activity, "
-                        f"iteration {_iter_n}/{_iter_max})."
+                        "上限を変える場合は config.yaml の agent.gateway_timeout を秒数で設定し、"
+                        "Gatewayを再起動してください。もう一度試すか、/reset で新しく始められます。"
                     )
                 else:
+                    _diag_lines = [
+                        f"⏱️ Agent inactive for {_timeout_mins} min — no tool calls "
+                        f"or API responses."
+                    ]
+                    if _cur_tool:
+                        _diag_lines.append(
+                            f"The agent appears stuck on tool `{_cur_tool}` "
+                            f"({_secs_ago:.0f}s since last activity, "
+                            f"iteration {_iter_n}/{_iter_max})."
+                        )
+                    else:
+                        _diag_lines.append(
+                            f"Last activity: {_last_desc} ({_secs_ago:.0f}s ago, "
+                            f"iteration {_iter_n}/{_iter_max}). "
+                            "The agent may have been waiting on an API response."
+                        )
                     _diag_lines.append(
-                        f"Last activity: {_last_desc} ({_secs_ago:.0f}s ago, "
-                        f"iteration {_iter_n}/{_iter_max}). "
-                        "The agent may have been waiting on an API response."
+                        "To increase the limit, set agent.gateway_timeout in config.yaml "
+                        "(value in seconds, 0 = no limit) and restart the gateway.\n"
+                        "Try again, or use /reset to start fresh."
                     )
-                _diag_lines.append(
-                    "To increase the limit, set agent.gateway_timeout in config.yaml "
-                    "(value in seconds, 0 = no limit) and restart the gateway.\n"
-                    "Try again, or use /reset to start fresh."
-                )
 
                 response = {
                     "final_response": "\n".join(_diag_lines),

@@ -1162,6 +1162,7 @@ async def test_run_agent_drops_tool_progress_after_generation_invalidation(monke
         chat_id="dm-1",
         chat_type="dm",
         thread_id=None,
+        user_id="473730953735438336",
     )
     session_key = "agent:main:discord:dm:dm-1"
     runner._session_run_generation[session_key] = 1
@@ -1171,7 +1172,7 @@ async def test_run_agent_drops_tool_progress_after_generation_invalidation(monke
 
     async def send_and_invalidate(chat_id, content, reply_to=None, metadata=None):
         result = await original_send(chat_id, content, reply_to=reply_to, metadata=metadata)
-        if "first command" in content and not invalidated["done"]:
+        if "シェル操作中" in content and not invalidated["done"]:
             invalidated["done"] = True
             runner._invalidate_session_run_generation(session_key, reason="test_stop")
         return result
@@ -1191,8 +1192,10 @@ async def test_run_agent_drops_tool_progress_after_generation_invalidation(monke
     all_progress_text = " ".join(call["content"] for call in adapter.sent)
     all_progress_text += " ".join(call["content"] for call in adapter.edits)
     assert result["final_response"] == "done"
-    assert 'first command' in all_progress_text
-    assert 'second command' not in all_progress_text
+    assert "シェル操作中" in all_progress_text
+    assert "first command" not in all_progress_text
+    assert "second command" not in all_progress_text
+    assert "×2" not in all_progress_text
 
 
 @pytest.mark.asyncio
@@ -1223,6 +1226,7 @@ async def test_run_agent_drops_interim_commentary_after_generation_invalidation(
         chat_id="dm-2",
         chat_type="dm",
         thread_id=None,
+        user_id="473730953735438336",
     )
     session_key = "agent:main:discord:dm:dm-2"
     runner._session_run_generation[session_key] = 1

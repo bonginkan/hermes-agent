@@ -623,6 +623,69 @@ async def test_discord_thread_require_mention_still_responds_when_mentioned(adap
 
 
 @pytest.mark.asyncio
+async def test_discord_thread_require_mention_still_responds_to_reply_to_bot(adapter, monkeypatch):
+    """thread_require_mention=true still lets replies to the bot through."""
+    monkeypatch.setenv("DISCORD_REQUIRE_MENTION", "true")
+    monkeypatch.setenv("DISCORD_THREAD_REQUIRE_MENTION", "true")
+    monkeypatch.delenv("DISCORD_FREE_RESPONSE_CHANNELS", raising=False)
+
+    thread = FakeThread(channel_id=456, name="multi-bot thread")
+    adapter._threads.mark("456")
+    bot_user = adapter._client.user
+
+    message = make_message(
+        channel=thread,
+        content="replying to your prior answer",
+        msg_type=discord_platform.discord.MessageType.reply,
+    )
+    message.reference = SimpleNamespace(
+        message_id=321,
+        resolved=SimpleNamespace(
+            id=321,
+            content="prior bot answer",
+            author=bot_user,
+        ),
+    )
+
+    await adapter._handle_message(message)
+
+    adapter.handle_message.assert_awaited_once()
+    event = adapter.handle_message.await_args.args[0]
+    assert event.reply_to_message_id == "321"
+    assert event.reply_to_author_id == "999"
+    assert event.reply_to_is_own_message is True
+
+
+@pytest.mark.asyncio
+async def test_discord_thread_require_mention_ignores_reply_to_someone_else(adapter, monkeypatch):
+    """thread_require_mention=true should not treat every reply as a bot request."""
+    monkeypatch.setenv("DISCORD_REQUIRE_MENTION", "true")
+    monkeypatch.setenv("DISCORD_THREAD_REQUIRE_MENTION", "true")
+    monkeypatch.delenv("DISCORD_FREE_RESPONSE_CHANNELS", raising=False)
+
+    thread = FakeThread(channel_id=456, name="multi-bot thread")
+    adapter._threads.mark("456")
+
+    message = make_message(
+        channel=thread,
+        content="replying to another person",
+        msg_type=discord_platform.discord.MessageType.reply,
+    )
+    message.reference = SimpleNamespace(
+        message_id=654,
+        resolved=SimpleNamespace(
+            id=654,
+            content="human note",
+            author=SimpleNamespace(id=111, display_name="Alice", name="Alice"),
+        ),
+    )
+
+    await adapter._handle_message(message)
+
+    adapter.handle_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_discord_thread_require_mention_via_config_extra(adapter, monkeypatch):
     """thread_require_mention can also be set via config.extra (yaml)."""
     monkeypatch.setenv("DISCORD_REQUIRE_MENTION", "true")

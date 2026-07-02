@@ -154,7 +154,7 @@ async def test_registers_native_restart_slash_command(adapter):
     adapter._run_simple_slash.assert_awaited_once_with(
         interaction,
         "/restart",
-        "Restart requested~",
+        "再起動を受け付けました。",
     )
 
 
@@ -468,7 +468,7 @@ async def test_handle_thread_create_slash_reports_failure(adapter):
 
     interaction.followup.send.assert_awaited_once()
     args, kwargs = interaction.followup.send.await_args
-    assert "Failed to create thread:" in args[0]
+    assert "スレッド作成に失敗しました:" in args[0]
     assert "nope" in args[0]
     assert kwargs["ephemeral"] is True
 
@@ -966,7 +966,7 @@ def test_register_skill_command_handles_unknown_skill_gracefully(adapter):
     asyncio.run(skill_cmd.callback(interaction, name="does-not-exist"))
 
     assert len(sent) == 1
-    assert "Unknown skill" in sent[0]["text"]
+    assert "スキルが見つかりません" in sent[0]["text"]
     assert "does-not-exist" in sent[0]["text"]
     assert sent[0]["ephemeral"] is True
 
@@ -1046,4 +1046,3 @@ def test_register_skill_command_autocomplete_filters_by_name_and_description(ada
     # (covered in other tests). The autocomplete filter itself is exercised
     # via direct function call in the real-discord integration path.
     assert skill_cmd.callback is not None
-

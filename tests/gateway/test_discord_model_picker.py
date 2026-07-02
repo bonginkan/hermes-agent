@@ -73,9 +73,9 @@ async def test_model_picker_clears_controls_before_running_switch_callback():
     await view._on_model_selected(interaction)
 
     assert events == [
-        ("initial-edit", "⚙ Switching Model", "Switching to `gpt-5.4`...", None),
+        ("initial-edit", "⚙ モデル切り替え中", "`gpt-5.4` に切り替えています...", None),
         ("switch", "456", "gpt-5.4", "copilot"),
-        ("final-edit", "⚙ Model Switched", "Model switched", None),
+        ("final-edit", "⚙ モデルを切り替えました", "Model switched", None),
     ]
     interaction.response.edit_message.assert_awaited_once()
     interaction.response.defer.assert_not_called()
@@ -111,7 +111,12 @@ async def test_expensive_model_requires_confirmation(monkeypatch):
     monkeypatch.setattr(
         "hermes_cli.model_cost_guard.expensive_model_warning",
         lambda *_args, **_kwargs: SimpleNamespace(
-            message="!!! EXPENSIVE MODEL WARNING !!!\ndid you mean to select openai/gpt-5.5?"
+            model="openai/gpt-5.5-pro",
+            provider="openrouter",
+            input_cost_per_million=25,
+            output_cost_per_million=120,
+            source="models.dev",
+            message="!!! EXPENSIVE MODEL WARNING !!!\ndid you mean to select openai/gpt-5.5?",
         ),
     )
 
@@ -149,8 +154,16 @@ async def test_expensive_model_requires_confirmation(monkeypatch):
     assert events == [
         (
             "edit",
-            "⚠ Expensive Model Warning",
-            "!!! EXPENSIVE MODEL WARNING !!!\ndid you mean to select openai/gpt-5.5?",
+            "⚠ 高額モデルの確認",
+            (
+                "高額モデルの可能性があります。\n\n"
+                "`openai/gpt-5.5-pro` はHermesの安全しきい値を超える料金として確認されています。\n"
+                "入力トークン: $25.00/100万\n"
+                "出力トークン: $120.00/100万\n"
+                "しきい値: 入力 $20/100万超、または出力 $100/100万超。\n"
+                "料金情報の参照元: models.dev\n"
+                "意図してこのモデルを使う場合だけ確認してください。"
+            ),
             view,
         ),
     ]
@@ -161,10 +174,10 @@ async def test_expensive_model_requires_confirmation(monkeypatch):
     assert events[1:] == [
         (
             "edit",
-            "⚙ Switching Model",
-            "Switching to `openai/gpt-5.5-pro`...",
+            "⚙ モデル切り替え中",
+            "`openai/gpt-5.5-pro` に切り替えています...",
             None,
         ),
         ("switch", "456", "openai/gpt-5.5-pro", "openrouter"),
-        ("final-edit", "⚙ Model Switched", "Model switched", None),
+        ("final-edit", "⚙ モデルを切り替えました", "Model switched", None),
     ]

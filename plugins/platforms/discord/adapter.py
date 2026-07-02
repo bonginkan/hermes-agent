@@ -71,6 +71,7 @@ _DISCORD_NONCONVERSATIONAL_HISTORY_MESSAGE_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(r"^\s*⏳\s+Working\s+—\s+\d+\s+min(?:\s|$)", re.IGNORECASE),
+    re.compile(r"^\s*⏳\s+処理中\s+—\s+\d+\s*分(?:\s|$)", re.IGNORECASE),
     re.compile(
         r"^\s*\[Background process\s+\S+\s+"
         r"(?:finished with exit code|is still running~)[\s\S]*\]\s*$",
@@ -81,8 +82,39 @@ _DISCORD_NONCONVERSATIONAL_HISTORY_MESSAGE_PATTERNS = (
         r"(?:finished|failed|timed out)[\s\S]*$",
         re.IGNORECASE,
     ),
+    re.compile(r"^\s*(?:✅|❌|🔄)\s+Hermesの更新[\s\S]*$", re.IGNORECASE),
     re.compile(r"^\s*♻️?\s+Gateway\s+(?:restarted successfully|online\b)[\s\S]*$", re.IGNORECASE),
+    re.compile(r"^\s*♻️?\s+(?:Gateway[のが]|ゲートウェイ)[\s\S]*$", re.IGNORECASE),
 )
+
+
+def _discord_expensive_model_warning_text(warning: Any) -> str:
+    """Return a Japanese warning for Discord model-picker cost confirmations."""
+    model = getattr(warning, "model", "") or "選択したモデル"
+    input_cost = getattr(warning, "input_cost_per_million", None)
+    output_cost = getattr(warning, "output_cost_per_million", None)
+    source = getattr(warning, "source", "") or ""
+
+    def _money(value: Any) -> str:
+        if value is None:
+            return "不明"
+        try:
+            return f"${value:.2f}/100万"
+        except Exception:
+            return str(value)
+
+    lines = [
+        "高額モデルの可能性があります。",
+        "",
+        f"`{model}` はHermesの安全しきい値を超える料金として確認されています。",
+        f"入力トークン: {_money(input_cost)}",
+        f"出力トークン: {_money(output_cost)}",
+        "しきい値: 入力 $20/100万超、または出力 $100/100万超。",
+    ]
+    if source:
+        lines.append(f"料金情報の参照元: {source}")
+    lines.append("意図してこのモデルを使う場合だけ確認してください。")
+    return "\n".join(lines)
 
 try:
     import discord
@@ -1869,7 +1901,7 @@ class DiscordAdapter(BasePlatformAdapter):
                     hint = getattr(file, "filename", "") or ""
                 elif files:
                     hint = getattr(files[0], "filename", "") or ""
-            thread_name = _derive_forum_thread_name(hint) if hint.strip() else "New Post"
+            thread_name = _derive_forum_thread_name(hint) if hint.strip() else "新規投稿"
 
         kwargs: Dict[str, Any] = {"name": thread_name}
         if content:
@@ -2963,7 +2995,7 @@ class DiscordAdapter(BasePlatformAdapter):
 
         try:
             await interaction.response.send_message(
-                "You're not authorized to use this command.",
+                "このコマンドを使う権限がありません。",
                 ephemeral=True,
             )
         except Exception as e:
@@ -3461,130 +3493,130 @@ class DiscordAdapter(BasePlatformAdapter):
 
         tree = self._client.tree
 
-        @tree.command(name="new", description="Start a new conversation")
+        @tree.command(name="new", description="新しい会話を開始")
         async def slash_new(interaction: discord.Interaction):
-            await self._run_simple_slash(interaction, "/reset", "New conversation started~")
+            await self._run_simple_slash(interaction, "/reset", "新しい会話を開始しました。")
 
-        @tree.command(name="reset", description="Reset your Hermes session")
+        @tree.command(name="reset", description="Hermesセッションをリセット")
         async def slash_reset(interaction: discord.Interaction):
-            await self._run_simple_slash(interaction, "/reset", "Session reset~")
+            await self._run_simple_slash(interaction, "/reset", "セッションをリセットしました。")
 
-        @tree.command(name="model", description="Show or change the model")
-        @discord.app_commands.describe(name="Model name (e.g. anthropic/claude-sonnet-4). Leave empty to see current.")
+        @tree.command(name="model", description="モデルを表示または変更")
+        @discord.app_commands.describe(name="モデル名。空のままだと現在の設定を表示します。")
         async def slash_model(interaction: discord.Interaction, name: str = ""):
             await self._run_simple_slash(interaction, f"/model {name}".strip())
 
-        @tree.command(name="reasoning", description="Show or change reasoning effort")
-        @discord.app_commands.describe(effort="Reasoning effort: none, minimal, low, medium, high, or xhigh.")
+        @tree.command(name="reasoning", description="推論の強さを表示または変更")
+        @discord.app_commands.describe(effort="推論の強さ: none, minimal, low, medium, high, xhigh")
         async def slash_reasoning(interaction: discord.Interaction, effort: str = ""):
             await self._run_simple_slash(interaction, f"/reasoning {effort}".strip())
 
-        @tree.command(name="personality", description="Set a personality")
-        @discord.app_commands.describe(name="Personality name. Leave empty to list available.")
+        @tree.command(name="personality", description="人格設定を変更")
+        @discord.app_commands.describe(name="人格名。空のままだと一覧を表示します。")
         async def slash_personality(interaction: discord.Interaction, name: str = ""):
             await self._run_simple_slash(interaction, f"/personality {name}".strip())
 
-        @tree.command(name="retry", description="Retry your last message")
+        @tree.command(name="retry", description="直前のメッセージを再実行")
         async def slash_retry(interaction: discord.Interaction):
-            await self._run_simple_slash(interaction, "/retry", "Retrying~")
+            await self._run_simple_slash(interaction, "/retry", "再試行します。")
 
-        @tree.command(name="undo", description="Remove the last exchange")
+        @tree.command(name="undo", description="直前のやり取りを取り消し")
         async def slash_undo(interaction: discord.Interaction):
             await self._run_simple_slash(interaction, "/undo")
 
-        @tree.command(name="status", description="Show Hermes session status")
+        @tree.command(name="status", description="Hermesセッションの状態を表示")
         async def slash_status(interaction: discord.Interaction):
-            await self._run_simple_slash(interaction, "/status", "Status sent~")
+            await self._run_simple_slash(interaction, "/status", "状態を送信しました。")
 
-        @tree.command(name="sethome", description="Set this chat as the home channel")
+        @tree.command(name="sethome", description="このチャットをホームに設定")
         async def slash_sethome(interaction: discord.Interaction):
             await self._run_simple_slash(interaction, "/sethome")
 
-        @tree.command(name="stop", description="Stop the running Hermes agent")
+        @tree.command(name="stop", description="実行中のHermesを停止")
         async def slash_stop(interaction: discord.Interaction):
-            await self._run_simple_slash(interaction, "/stop", "Stop requested~")
+            await self._run_simple_slash(interaction, "/stop", "停止を受け付けました。")
 
-        @tree.command(name="steer", description="Inject a message after the next tool call (no interrupt)")
-        @discord.app_commands.describe(prompt="Text to inject into the agent's next tool result")
+        @tree.command(name="steer", description="次の処理結果に追加入力を差し込み")
+        @discord.app_commands.describe(prompt="差し込む内容")
         async def slash_steer(interaction: discord.Interaction, prompt: str):
             await self._run_simple_slash(interaction, f"/steer {prompt}".strip())
 
-        @tree.command(name="compress", description="Compress conversation context")
+        @tree.command(name="compress", description="会話コンテキストを圧縮")
         async def slash_compress(interaction: discord.Interaction):
             await self._run_simple_slash(interaction, "/compress")
 
-        @tree.command(name="title", description="Set or show the session title")
-        @discord.app_commands.describe(name="Session title. Leave empty to show current.")
+        @tree.command(name="title", description="セッション名を表示または変更")
+        @discord.app_commands.describe(name="セッション名。空のままだと現在の名前を表示します。")
         async def slash_title(interaction: discord.Interaction, name: str = ""):
             await self._run_simple_slash(interaction, f"/title {name}".strip())
 
-        @tree.command(name="resume", description="Resume a previously-named session")
-        @discord.app_commands.describe(name="Session name to resume. Leave empty to list sessions.")
+        @tree.command(name="resume", description="以前のセッションを再開")
+        @discord.app_commands.describe(name="再開するセッション名。空のままだと一覧を表示します。")
         async def slash_resume(interaction: discord.Interaction, name: str = ""):
             await self._run_simple_slash(interaction, f"/resume {name}".strip())
 
-        @tree.command(name="usage", description="Show session usage and Codex usage guidance")
+        @tree.command(name="usage", description="使用状況とCodex利用案内を表示")
         async def slash_usage(interaction: discord.Interaction):
             await self._run_simple_slash(interaction, "/usage")
 
-        @tree.command(name="help", description="Show available commands")
+        @tree.command(name="help", description="利用できるコマンドを表示")
         async def slash_help(interaction: discord.Interaction):
             await self._run_simple_slash(interaction, "/help")
 
-        @tree.command(name="insights", description="Show usage insights and analytics")
-        @discord.app_commands.describe(days="Number of days to analyze (default: 7)")
+        @tree.command(name="insights", description="使用状況の分析を表示")
+        @discord.app_commands.describe(days="分析する日数（既定値: 7）")
         async def slash_insights(interaction: discord.Interaction, days: int = 7):
             await self._run_simple_slash(interaction, f"/insights {days}")
 
-        @tree.command(name="reload-mcp", description="Reload MCP servers from config")
+        @tree.command(name="reload-mcp", description="設定からMCPサーバーを再読み込み")
         async def slash_reload_mcp(interaction: discord.Interaction):
             await self._run_simple_slash(interaction, "/reload-mcp")
 
-        @tree.command(name="reload-skills", description="Re-scan ~/.hermes/skills/ for new or removed skills")
+        @tree.command(name="reload-skills", description="Hermesスキルを再読み込み")
         async def slash_reload_skills(interaction: discord.Interaction):
             await self._run_simple_slash(interaction, "/reload-skills")
 
-        @tree.command(name="voice", description="Toggle voice reply mode")
-        @discord.app_commands.describe(mode="Voice mode: join, channel, leave, on, tts, off, or status")
+        @tree.command(name="voice", description="音声返信モードを切り替え")
+        @discord.app_commands.describe(mode="音声モード: join, channel, leave, on, tts, off, status")
         @discord.app_commands.choices(mode=[
             # `join` and `channel` both route to _handle_voice_channel_join in
             # gateway/run.py — expose both in the slash UI so autocomplete
             # matches what the docs advertise and what the runner accepts when
             # the command is typed as plain text.
-            discord.app_commands.Choice(name="join — join your voice channel", value="join"),
-            discord.app_commands.Choice(name="channel — join your voice channel (alias)", value="channel"),
-            discord.app_commands.Choice(name="leave — leave voice channel", value="leave"),
-            discord.app_commands.Choice(name="on — voice reply to voice messages", value="on"),
-            discord.app_commands.Choice(name="tts — voice reply to all messages", value="tts"),
-            discord.app_commands.Choice(name="off — text only", value="off"),
-            discord.app_commands.Choice(name="status — show current mode", value="status"),
+            discord.app_commands.Choice(name="join — 音声チャンネルに参加", value="join"),
+            discord.app_commands.Choice(name="channel — 音声チャンネルに参加", value="channel"),
+            discord.app_commands.Choice(name="leave — 音声チャンネルから退出", value="leave"),
+            discord.app_commands.Choice(name="on — 音声メッセージに音声で返信", value="on"),
+            discord.app_commands.Choice(name="tts — すべての返信を音声化", value="tts"),
+            discord.app_commands.Choice(name="off — テキストのみ", value="off"),
+            discord.app_commands.Choice(name="status — 現在のモードを表示", value="status"),
         ])
         async def slash_voice(interaction: discord.Interaction, mode: str = ""):
             await self._run_simple_slash(interaction, f"/voice {mode}".strip())
 
-        @tree.command(name="update", description="Update Hermes Agent to the latest version")
+        @tree.command(name="update", description="Hermes Agentを最新版に更新")
         async def slash_update(interaction: discord.Interaction):
-            await self._run_simple_slash(interaction, "/update", "Update initiated~")
+            await self._run_simple_slash(interaction, "/update", "更新を開始しました。")
 
-        @tree.command(name="restart", description="Gracefully restart the Hermes gateway")
+        @tree.command(name="restart", description="Hermesゲートウェイを安全に再起動")
         async def slash_restart(interaction: discord.Interaction):
-            await self._run_simple_slash(interaction, "/restart", "Restart requested~")
+            await self._run_simple_slash(interaction, "/restart", "再起動を受け付けました。")
 
-        @tree.command(name="approve", description="Approve a pending dangerous command")
-        @discord.app_commands.describe(scope="Optional: 'all', 'session', 'always', 'all session', 'all always'")
+        @tree.command(name="approve", description="保留中の危険なコマンドを承認")
+        @discord.app_commands.describe(scope="任意: all, session, always, all session, all always")
         async def slash_approve(interaction: discord.Interaction, scope: str = ""):
             await self._run_simple_slash(interaction, f"/approve {scope}".strip())
 
-        @tree.command(name="deny", description="Deny a pending dangerous command")
-        @discord.app_commands.describe(scope="Optional: 'all' to deny all pending commands")
+        @tree.command(name="deny", description="保留中の危険なコマンドを拒否")
+        @discord.app_commands.describe(scope="任意: all で全件拒否")
         async def slash_deny(interaction: discord.Interaction, scope: str = ""):
             await self._run_simple_slash(interaction, f"/deny {scope}".strip())
 
-        @tree.command(name="thread", description="Create a new thread and start a Hermes session in it")
+        @tree.command(name="thread", description="新しいスレッドでHermesセッションを開始")
         @discord.app_commands.describe(
-            name="Thread name",
-            message="Optional first message to send to Hermes in the thread",
-            auto_archive_duration="Auto-archive in minutes (60, 1440, 4320, 10080)",
+            name="スレッド名",
+            message="任意: スレッドでHermesに送る最初のメッセージ",
+            auto_archive_duration="自動アーカイブまでの分数（60, 1440, 4320, 10080）",
         )
         async def slash_thread(
             interaction: discord.Interaction,
@@ -3596,15 +3628,15 @@ class DiscordAdapter(BasePlatformAdapter):
             # so a rejected invoker can receive an ephemeral rejection.
             await self._handle_thread_create_slash(interaction, name, message, auto_archive_duration)
 
-        @tree.command(name="queue", description="Queue a prompt for the next turn (doesn't interrupt)")
-        @discord.app_commands.describe(prompt="The prompt to queue")
+        @tree.command(name="queue", description="次のターンに回す（割り込まない）")
+        @discord.app_commands.describe(prompt="次のターンに回す内容")
         async def slash_queue(interaction: discord.Interaction, prompt: str):
-            await self._run_simple_slash(interaction, f"/queue {prompt}", "Queued for the next turn.")
+            await self._run_simple_slash(interaction, f"/queue {prompt}", "次のターンに回しました。")
 
-        @tree.command(name="background", description="Run a prompt in the background")
-        @discord.app_commands.describe(prompt="The prompt to run in the background")
+        @tree.command(name="background", description="バックグラウンドで実行")
+        @discord.app_commands.describe(prompt="バックグラウンドで実行する内容")
         async def slash_background(interaction: discord.Interaction, prompt: str):
-            await self._run_simple_slash(interaction, f"/background {prompt}", "Background task started~")
+            await self._run_simple_slash(interaction, f"/background {prompt}", "バックグラウンド処理を開始しました。")
 
         # ── Auto-register any gateway-available commands not yet on the tree ──
         # This ensures new commands added to COMMAND_REGISTRY in
@@ -3613,12 +3645,12 @@ class DiscordAdapter(BasePlatformAdapter):
         def _build_auto_slash_command(_name: str, _description: str, _args_hint: str = ""):
             """Build a discord.app_commands.Command that proxies to _run_simple_slash."""
             discord_name = _name.lower()[:32]
-            desc = (_description or f"Run /{_name}")[:100]
+            desc = f"/{_name} を実行"[:100]
             has_args = bool(_args_hint)
 
             if has_args:
                 def _make_args_handler(__name: str, __hint: str):
-                    @discord.app_commands.describe(args=f"Arguments: {__hint}"[:100])
+                    @discord.app_commands.describe(args=f"引数: {__hint}"[:100])
                     async def _handler(interaction: discord.Interaction, args: str = ""):
                         await self._run_simple_slash(
                             interaction, f"/{__name} {args}".strip()
@@ -3879,8 +3911,8 @@ class DiscordAdapter(BasePlatformAdapter):
                 return choices
 
             @discord.app_commands.describe(
-                name="Which skill to run",
-                args="Optional arguments for the skill",
+                name="実行するスキル",
+                args="任意: スキルに渡す引数",
             )
             @discord.app_commands.autocomplete(name=_autocomplete_name)
             async def _skill_handler(
@@ -3895,8 +3927,7 @@ class DiscordAdapter(BasePlatformAdapter):
                 entry = self._skill_lookup.get(name)
                 if not entry:
                     await interaction.response.send_message(
-                        f"Unknown skill: `{name}`. Start typing for "
-                        f"autocomplete suggestions.",
+                        f"スキルが見つかりません: `{name}`。入力を始めると候補が表示されます。",
                         ephemeral=True,
                     )
                     return
@@ -3907,7 +3938,7 @@ class DiscordAdapter(BasePlatformAdapter):
 
             cmd = discord.app_commands.Command(
                 name="skill",
-                description="Run a Hermes skill",
+                description="Hermesスキルを実行",
                 callback=_skill_handler,
             )
             tree.add_command(cmd)
@@ -4051,7 +4082,7 @@ class DiscordAdapter(BasePlatformAdapter):
 
         if not result.get("success"):
             error = result.get("error", "unknown error")
-            await interaction.followup.send(f"Failed to create thread: {error}", ephemeral=True)
+            await interaction.followup.send(f"スレッド作成に失敗しました: {error}", ephemeral=True)
             return
 
         thread_id = result.get("thread_id")
@@ -4059,7 +4090,7 @@ class DiscordAdapter(BasePlatformAdapter):
 
         # Tell the user where the thread is
         link = f"<#{thread_id}>" if thread_id else f"**{thread_name}**"
-        await interaction.followup.send(f"Created thread {link}", ephemeral=True)
+        await interaction.followup.send(f"スレッドを作成しました: {link}", ephemeral=True)
 
         # Track thread participation so follow-ups don't require @mention
         if thread_id:
@@ -4679,7 +4710,7 @@ class DiscordAdapter(BasePlatformAdapter):
 
     async def send_exec_approval(
         self, chat_id: str, command: str, session_key: str,
-        description: str = "dangerous command",
+        description: str = "危険なコマンド",
         metadata: Optional[dict] = None,
     ) -> SendResult:
         """
@@ -4705,11 +4736,11 @@ class DiscordAdapter(BasePlatformAdapter):
             max_desc = 4088
             cmd_display = command if len(command) <= max_desc else command[: max_desc - 3] + "..."
             embed = discord.Embed(
-                title="⚠️ Command Approval Required",
+                title="⚠️ コマンド承認が必要です",
                 description=f"```\n{cmd_display}\n```",
                 color=discord.Color.orange(),
             )
-            embed.add_field(name="Reason", value=description, inline=False)
+            embed.add_field(name="理由", value=description, inline=False)
 
             view = ExecApprovalView(
                 session_key=session_key,
@@ -4745,7 +4776,7 @@ class DiscordAdapter(BasePlatformAdapter):
             max_desc = 4088
             body = message if len(message) <= max_desc else message[: max_desc - 3] + "..."
             embed = discord.Embed(
-                title=title or "Confirm",
+                title=title or "確認",
                 description=body,
                 color=discord.Color.orange(),
             )
@@ -4810,7 +4841,7 @@ class DiscordAdapter(BasePlatformAdapter):
                 body = body[: max_desc - 3] + "..."
 
             embed = discord.Embed(
-                title="❓ Hermes needs your input",
+                title="❓ Hermesから確認があります",
                 description=body,
                 color=discord.Color.orange(),
             )
@@ -4897,9 +4928,9 @@ class DiscordAdapter(BasePlatformAdapter):
             if not channel:
                 channel = await self._client.fetch_channel(int(target_id))
 
-            default_hint = f" (default: {default})" if default else ""
+            default_hint = f"（既定値: {default}）" if default else ""
             embed = discord.Embed(
-                title="⚕ Update Needs Your Input",
+                title="⚕ 更新に入力が必要です",
                 description=f"{prompt}{default_hint}",
                 color=discord.Color.gold(),
             )
@@ -4951,11 +4982,11 @@ class DiscordAdapter(BasePlatformAdapter):
                 provider_label = current_provider
 
             embed = discord.Embed(
-                title="⚙ Model Configuration",
+                title="⚙ モデル設定",
                 description=(
-                    f"Current model: `{current_model or 'unknown'}`\n"
-                    f"Provider: {provider_label}\n\n"
-                    f"Select a provider:"
+                    f"現在のモデル: `{current_model or '不明'}`\n"
+                    f"プロバイダ: {provider_label}\n\n"
+                    f"プロバイダを選択してください。"
                 ),
                 color=discord.Color.blue(),
             )
@@ -5167,6 +5198,19 @@ class DiscordAdapter(BasePlatformAdapter):
             parent_channel_id = self._get_parent_channel_id(message.channel)
 
         is_voice_linked_channel = False
+        client_user = self._client.user if self._client is not None else None
+
+        reference = getattr(message, "reference", None)
+        resolved_reference = getattr(reference, "resolved", None) if reference else None
+        reply_to_author = getattr(resolved_reference, "author", None) if resolved_reference is not None else None
+        reply_to_is_own_message = False
+        if reply_to_author is not None and client_user is not None:
+            self_user_id = str(getattr(client_user, "id", "") or "")
+            reply_author_id = str(getattr(reply_to_author, "id", "") or "")
+            reply_to_is_own_message = (
+                reply_to_author == client_user
+                or bool(self_user_id and reply_author_id == self_user_id)
+            )
 
         # Save mention-stripped text before auto-threading since create_thread()
         # can clobber message.content, breaking /command detection in channels.
@@ -5184,10 +5228,10 @@ class DiscordAdapter(BasePlatformAdapter):
             if snapshot_text_parts and not raw_content:
                 raw_content = "\n".join(snapshot_text_parts)
                 normalized_content = raw_content
-        if self._client.user and self._client.user in message.mentions:
+        if client_user and client_user in message.mentions:
             mention_prefix = True
-            normalized_content = normalized_content.replace(f"<@{self._client.user.id}>", "").strip()
-            normalized_content = normalized_content.replace(f"<@!{self._client.user.id}>", "").strip()
+            normalized_content = normalized_content.replace(f"<@{client_user.id}>", "").strip()
+            normalized_content = normalized_content.replace(f"<@!{client_user.id}>", "").strip()
             message.content = normalized_content
         if not isinstance(message.channel, discord.DMChannel):
             channel_ids = {str(message.channel.id)}
@@ -5237,7 +5281,7 @@ class DiscordAdapter(BasePlatformAdapter):
             )
 
             if require_mention and not is_free_channel and not in_bot_thread:
-                if self._client.user not in message.mentions and not mention_prefix:
+                if client_user not in message.mentions and not mention_prefix and not reply_to_is_own_message:
                     return
         # Auto-thread: when enabled, automatically create a thread for every
         # @mention in a text channel so each conversation is isolated (like Slack).
@@ -5260,8 +5304,6 @@ class DiscordAdapter(BasePlatformAdapter):
                     self._threads.mark(thread_id)
 
         referenced_attachments = []
-        reference = getattr(message, "reference", None)
-        resolved_reference = getattr(reference, "resolved", None) if reference else None
         if resolved_reference is not None:
             referenced_attachments = list(getattr(resolved_reference, "attachments", []) or [])
 
@@ -5539,10 +5581,19 @@ class DiscordAdapter(BasePlatformAdapter):
 
         reply_to_id = None
         reply_to_text = None
+        reply_to_author_id = None
+        reply_to_author_name = None
         if message.reference:
             reply_to_id = str(message.reference.message_id)
             if message.reference.resolved:
                 reply_to_text = getattr(message.reference.resolved, "content", None) or None
+            if reply_to_author is not None:
+                reply_author_raw_id = getattr(reply_to_author, "id", None)
+                reply_to_author_id = str(reply_author_raw_id) if reply_author_raw_id is not None else None
+                reply_to_author_name = (
+                    getattr(reply_to_author, "display_name", None)
+                    or getattr(reply_to_author, "name", None)
+                )
 
         event = MessageEvent(
             text=event_text,
@@ -5554,6 +5605,9 @@ class DiscordAdapter(BasePlatformAdapter):
             media_types=media_types,
             reply_to_message_id=reply_to_id,
             reply_to_text=reply_to_text,
+            reply_to_author_id=reply_to_author_id,
+            reply_to_author_name=reply_to_author_name,
+            reply_to_is_own_message=reply_to_is_own_message,
             timestamp=message.created_at,
             auto_skill=_skills,
             channel_prompt=_channel_prompt,
@@ -5772,13 +5826,13 @@ def _define_discord_view_classes() -> None:
             """Resolve the approval via the gateway approval queue and update the embed."""
             if self.resolved:
                 await interaction.response.send_message(
-                    "This approval has already been resolved~", ephemeral=True
+                    "この承認はすでに処理済みです。", ephemeral=True
                 )
                 return
 
             if not self._check_auth(interaction):
                 await interaction.response.send_message(
-                    "You're not authorized to approve commands~", ephemeral=True
+                    "コマンド承認の権限がありません。", ephemeral=True
                 )
                 return
 
@@ -5788,7 +5842,7 @@ def _define_discord_view_classes() -> None:
             embed = interaction.message.embeds[0] if interaction.message.embeds else None
             if embed:
                 embed.color = color
-                embed.set_footer(text=f"{label} by {interaction.user.display_name}")
+                embed.set_footer(text=f"{label}: {interaction.user.display_name}")
 
             # Disable all buttons
             for child in self.children:
@@ -5807,29 +5861,29 @@ def _define_discord_view_classes() -> None:
             except Exception as exc:
                 logger.error("Failed to resolve gateway approval from button: %s", exc)
 
-        @discord.ui.button(label="Allow Once", style=discord.ButtonStyle.green)
+        @discord.ui.button(label="今回だけ許可", style=discord.ButtonStyle.green)
         async def allow_once(
             self, interaction: discord.Interaction, button: discord.ui.Button
         ):
-            await self._resolve(interaction, "once", discord.Color.green(), "Approved once")
+            await self._resolve(interaction, "once", discord.Color.green(), "今回だけ許可")
 
-        @discord.ui.button(label="Allow Session", style=discord.ButtonStyle.grey)
+        @discord.ui.button(label="セッション中許可", style=discord.ButtonStyle.grey)
         async def allow_session(
             self, interaction: discord.Interaction, button: discord.ui.Button
         ):
-            await self._resolve(interaction, "session", discord.Color.blue(), "Approved for session")
+            await self._resolve(interaction, "session", discord.Color.blue(), "セッション中許可")
 
-        @discord.ui.button(label="Always Allow", style=discord.ButtonStyle.blurple)
+        @discord.ui.button(label="常に許可", style=discord.ButtonStyle.blurple)
         async def allow_always(
             self, interaction: discord.Interaction, button: discord.ui.Button
         ):
-            await self._resolve(interaction, "always", discord.Color.purple(), "Approved permanently")
+            await self._resolve(interaction, "always", discord.Color.purple(), "常に許可")
 
-        @discord.ui.button(label="Deny", style=discord.ButtonStyle.red)
+        @discord.ui.button(label="拒否", style=discord.ButtonStyle.red)
         async def deny(
             self, interaction: discord.Interaction, button: discord.ui.Button
         ):
-            await self._resolve(interaction, "deny", discord.Color.red(), "Denied")
+            await self._resolve(interaction, "deny", discord.Color.red(), "拒否")
 
         async def on_timeout(self):
             """Handle view timeout -- disable buttons and mark as expired."""
@@ -5843,7 +5897,7 @@ def _define_discord_view_classes() -> None:
                     embed = msg.embeds[0] if msg.embeds else None
                     if embed:
                         embed.color = discord.Color.greyple()
-                        embed.set_footer(text="⏱ Prompt expired — no action taken")
+                        embed.set_footer(text="⏱ 期限切れです。操作は行われませんでした。")
                     await msg.edit(embed=embed, view=self)
                 except Exception:
                     pass  # message deleted or too old to edit
@@ -5891,12 +5945,12 @@ def _define_discord_view_classes() -> None:
         ):
             if self.resolved:
                 await interaction.response.send_message(
-                    "This prompt has already been resolved~", ephemeral=True,
+                    "この確認はすでに処理済みです。", ephemeral=True,
                 )
                 return
             if not self._check_auth(interaction):
                 await interaction.response.send_message(
-                    "You're not authorized to answer this prompt~", ephemeral=True,
+                    "この確認に回答する権限がありません。", ephemeral=True,
                 )
                 return
 
@@ -5905,7 +5959,7 @@ def _define_discord_view_classes() -> None:
             embed = interaction.message.embeds[0] if interaction.message.embeds else None
             if embed:
                 embed.color = color
-                embed.set_footer(text=f"{label} by {interaction.user.display_name}")
+                embed.set_footer(text=f"{label}: {interaction.user.display_name}")
 
             for child in self.children:
                 child.disabled = True
@@ -5929,23 +5983,23 @@ def _define_discord_view_classes() -> None:
             except Exception as exc:
                 logger.error("Discord slash-confirm resolve failed: %s", exc, exc_info=True)
 
-        @discord.ui.button(label="Approve Once", style=discord.ButtonStyle.green)
+        @discord.ui.button(label="今回だけ実行", style=discord.ButtonStyle.green)
         async def approve_once(
             self, interaction: discord.Interaction, button: discord.ui.Button,
         ):
-            await self._resolve(interaction, "once", discord.Color.green(), "Approved once")
+            await self._resolve(interaction, "once", discord.Color.green(), "今回だけ実行")
 
-        @discord.ui.button(label="Always Approve", style=discord.ButtonStyle.blurple)
+        @discord.ui.button(label="今後は確認しない", style=discord.ButtonStyle.blurple)
         async def approve_always(
             self, interaction: discord.Interaction, button: discord.ui.Button,
         ):
-            await self._resolve(interaction, "always", discord.Color.purple(), "Always approved")
+            await self._resolve(interaction, "always", discord.Color.purple(), "今後は確認しない")
 
-        @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red)
+        @discord.ui.button(label="キャンセル", style=discord.ButtonStyle.red)
         async def cancel(
             self, interaction: discord.Interaction, button: discord.ui.Button,
         ):
-            await self._resolve(interaction, "cancel", discord.Color.greyple(), "Cancelled")
+            await self._resolve(interaction, "cancel", discord.Color.greyple(), "キャンセル")
 
         async def on_timeout(self):
             self.resolved = True
@@ -5958,7 +6012,7 @@ def _define_discord_view_classes() -> None:
                     embed = msg.embeds[0] if msg.embeds else None
                     if embed:
                         embed.color = discord.Color.greyple()
-                        embed.set_footer(text="⏱ Prompt expired — no action taken")
+                        embed.set_footer(text="⏱ 期限切れです。操作は行われませんでした。")
                     await msg.edit(embed=embed, view=self)
                 except Exception:
                     pass
@@ -5995,12 +6049,12 @@ def _define_discord_view_classes() -> None:
         ):
             if self.resolved:
                 await interaction.response.send_message(
-                    "Already answered~", ephemeral=True
+                    "すでに回答済みです。", ephemeral=True
                 )
                 return
             if not self._check_auth(interaction):
                 await interaction.response.send_message(
-                    "You're not authorized~", ephemeral=True
+                    "回答する権限がありません。", ephemeral=True
                 )
                 return
 
@@ -6010,7 +6064,7 @@ def _define_discord_view_classes() -> None:
             embed = interaction.message.embeds[0] if interaction.message.embeds else None
             if embed:
                 embed.color = color
-                embed.set_footer(text=f"{label} by {interaction.user.display_name}")
+                embed.set_footer(text=f"{label}: {interaction.user.display_name}")
 
             for child in self.children:
                 child.disabled = True
@@ -6031,17 +6085,17 @@ def _define_discord_view_classes() -> None:
             except Exception as exc:
                 logger.error("Failed to write update response: %s", exc)
 
-        @discord.ui.button(label="Yes", style=discord.ButtonStyle.green, emoji="✓")
+        @discord.ui.button(label="はい", style=discord.ButtonStyle.green, emoji="✓")
         async def yes_btn(
             self, interaction: discord.Interaction, button: discord.ui.Button
         ):
-            await self._respond(interaction, "y", discord.Color.green(), "Yes")
+            await self._respond(interaction, "y", discord.Color.green(), "はい")
 
-        @discord.ui.button(label="No", style=discord.ButtonStyle.red, emoji="✗")
+        @discord.ui.button(label="いいえ", style=discord.ButtonStyle.red, emoji="✗")
         async def no_btn(
             self, interaction: discord.Interaction, button: discord.ui.Button
         ):
-            await self._respond(interaction, "n", discord.Color.red(), "No")
+            await self._respond(interaction, "n", discord.Color.red(), "いいえ")
 
         async def on_timeout(self):
             self.resolved = True
@@ -6054,7 +6108,7 @@ def _define_discord_view_classes() -> None:
                     embed = msg.embeds[0] if msg.embeds else None
                     if embed:
                         embed.color = discord.Color.greyple()
-                        embed.set_footer(text="⏱ Prompt expired — no action taken")
+                        embed.set_footer(text="⏱ 期限切れです。操作は行われませんでした。")
                     await msg.edit(embed=embed, view=self)
                 except Exception:
                     pass
@@ -6102,8 +6156,8 @@ def _define_discord_view_classes() -> None:
             options = []
             for p in self.providers:
                 count = p.get("total_models", len(p.get("models", [])))
-                label = f"{p['name']} ({count} models)"
-                desc = "current" if p.get("is_current") else None
+                label = f"{p['name']} ({count}件)"
+                desc = "現在の設定" if p.get("is_current") else None
                 options.append(
                     discord.SelectOption(
                         label=label[:100],
@@ -6115,7 +6169,7 @@ def _define_discord_view_classes() -> None:
                 return
 
             select = discord.ui.Select(
-                placeholder="Choose a provider...",
+                placeholder="プロバイダを選択...",
                 options=options[:25],
                 custom_id="model_provider_select",
             )
@@ -6123,7 +6177,7 @@ def _define_discord_view_classes() -> None:
             self.add_item(select)
 
             cancel_btn = discord.ui.Button(
-                label="Cancel", style=discord.ButtonStyle.red, custom_id="model_cancel"
+                label="キャンセル", style=discord.ButtonStyle.red, custom_id="model_cancel"
             )
             cancel_btn.callback = self._on_cancel
             self.add_item(cancel_btn)
@@ -6151,7 +6205,7 @@ def _define_discord_view_classes() -> None:
                 return
 
             select = discord.ui.Select(
-                placeholder=f"Choose a model from {provider.get('name', provider_slug)}...",
+                placeholder=f"{provider.get('name', provider_slug)} のモデルを選択...",
                 options=options,
                 custom_id="model_model_select",
             )
@@ -6159,13 +6213,13 @@ def _define_discord_view_classes() -> None:
             self.add_item(select)
 
             back_btn = discord.ui.Button(
-                label="◀ Back", style=discord.ButtonStyle.grey, custom_id="model_back"
+                label="◀ 戻る", style=discord.ButtonStyle.grey, custom_id="model_back"
             )
             back_btn.callback = self._on_back
             self.add_item(back_btn)
 
             cancel_btn = discord.ui.Button(
-                label="Cancel", style=discord.ButtonStyle.red, custom_id="model_cancel2"
+                label="キャンセル", style=discord.ButtonStyle.red, custom_id="model_cancel2"
             )
             cancel_btn.callback = self._on_cancel
             self.add_item(cancel_btn)
@@ -6176,7 +6230,7 @@ def _define_discord_view_classes() -> None:
             self._pending_expensive_model = model_id
 
             confirm_btn = discord.ui.Button(
-                label="Switch anyway",
+                label="それでも切り替える",
                 style=discord.ButtonStyle.red,
                 custom_id="model_expensive_confirm",
             )
@@ -6184,7 +6238,7 @@ def _define_discord_view_classes() -> None:
             self.add_item(confirm_btn)
 
             cancel_btn = discord.ui.Button(
-                label="Cancel",
+                label="キャンセル",
                 style=discord.ButtonStyle.grey,
                 custom_id="model_expensive_cancel",
             )
@@ -6208,7 +6262,7 @@ def _define_discord_view_classes() -> None:
         async def _on_provider_selected(self, interaction: discord.Interaction):
             if not self._check_auth(interaction):
                 await interaction.response.send_message(
-                    "You're not authorized~", ephemeral=True
+                    "操作する権限がありません。", ephemeral=True
                 )
                 return
 
@@ -6223,12 +6277,12 @@ def _define_discord_view_classes() -> None:
 
             total = provider.get("total_models", 0) if provider else 0
             shown = min(len(provider.get("models", [])), 25) if provider else 0
-            extra = f"\n*{total - shown} more available — type `/model <name>` directly*" if total > shown else ""
+            extra = f"\n*他に {total - shown} 件あります。直接 `/model <name>` と入力してください。*" if total > shown else ""
 
             await interaction.response.edit_message(
                 embed=discord.Embed(
-                    title="⚙ Model Configuration",
-                    description=f"Provider: **{pname}**\nSelect a model:{extra}",
+                    title="⚙ モデル設定",
+                    description=f"プロバイダ: **{pname}**\nモデルを選択してください。{extra}",
                     color=discord.Color.blue(),
                 ),
                 view=self,
@@ -6241,12 +6295,12 @@ def _define_discord_view_classes() -> None:
         ):
             if self.resolved:
                 await interaction.response.send_message(
-                    "Already resolved~", ephemeral=True
+                    "すでに処理済みです。", ephemeral=True
                 )
                 return
             if not self._check_auth(interaction):
                 await interaction.response.send_message(
-                    "You're not authorized~", ephemeral=True
+                    "操作する権限がありません。", ephemeral=True
                 )
                 return
 
@@ -6254,8 +6308,8 @@ def _define_discord_view_classes() -> None:
             self.clear_items()
             await interaction.response.edit_message(
                 embed=discord.Embed(
-                    title="⚙ Switching Model",
-                    description=f"Switching to `{model_id}`...",
+                    title="⚙ モデル切り替え中",
+                    description=f"`{model_id}` に切り替えています...",
                     color=discord.Color.blue(),
                 ),
                 view=None,
@@ -6268,11 +6322,11 @@ def _define_discord_view_classes() -> None:
                     self._selected_provider,
                 )
             except Exception as exc:
-                result_text = f"Error switching model: {exc}"
+                result_text = f"モデル切り替えでエラー: {exc}"
 
             await interaction.edit_original_response(
                 embed=discord.Embed(
-                    title="⚙ Model Switched",
+                    title="⚙ モデルを切り替えました",
                     description=result_text,
                     color=discord.Color.green(),
                 ),
@@ -6282,12 +6336,12 @@ def _define_discord_view_classes() -> None:
         async def _on_model_selected(self, interaction: discord.Interaction):
             if self.resolved:
                 await interaction.response.send_message(
-                    "Already resolved~", ephemeral=True
+                    "すでに処理済みです。", ephemeral=True
                 )
                 return
             if not self._check_auth(interaction):
                 await interaction.response.send_message(
-                    "You're not authorized~", ephemeral=True
+                    "操作する権限がありません。", ephemeral=True
                 )
                 return
 
@@ -6297,8 +6351,8 @@ def _define_discord_view_classes() -> None:
                 self._build_expensive_confirm(model_id)
                 await interaction.response.edit_message(
                     embed=discord.Embed(
-                        title="⚠ Expensive Model Warning",
-                        description=warning.message,
+                        title="⚠ 高額モデルの確認",
+                        description=_discord_expensive_model_warning_text(warning),
                         color=discord.Color.red(),
                     ),
                     view=self,
@@ -6310,12 +6364,12 @@ def _define_discord_view_classes() -> None:
         async def _on_expensive_confirm(self, interaction: discord.Interaction):
             if not self._check_auth(interaction):
                 await interaction.response.send_message(
-                    "You're not authorized~", ephemeral=True
+                    "操作する権限がありません。", ephemeral=True
                 )
                 return
             if not self._pending_expensive_model:
                 await interaction.response.send_message(
-                    "Model selection expired.", ephemeral=True
+                    "モデル選択の期限が切れました。", ephemeral=True
                 )
                 return
             await self._switch_selected_model(
@@ -6326,7 +6380,7 @@ def _define_discord_view_classes() -> None:
         async def _on_back(self, interaction: discord.Interaction):
             if not self._check_auth(interaction):
                 await interaction.response.send_message(
-                    "You're not authorized~", ephemeral=True
+                    "操作する権限がありません。", ephemeral=True
                 )
                 return
 
@@ -6340,11 +6394,11 @@ def _define_discord_view_classes() -> None:
 
             await interaction.response.edit_message(
                 embed=discord.Embed(
-                    title="⚙ Model Configuration",
+                    title="⚙ モデル設定",
                     description=(
-                        f"Current model: `{self.current_model or 'unknown'}`\n"
-                        f"Provider: {provider_label}\n\n"
-                        f"Select a provider:"
+                        f"現在のモデル: `{self.current_model or '不明'}`\n"
+                        f"プロバイダ: {provider_label}\n\n"
+                        f"プロバイダを選択してください。"
                     ),
                     color=discord.Color.blue(),
                 ),
@@ -6356,8 +6410,8 @@ def _define_discord_view_classes() -> None:
             self.clear_items()
             await interaction.response.edit_message(
                 embed=discord.Embed(
-                    title="⚙ Model Configuration",
-                    description="Model selection cancelled.",
+                    title="⚙ モデル設定",
+                    description="モデル選択をキャンセルしました。",
                     color=discord.Color.greyple(),
                 ),
                 view=self,
@@ -6371,8 +6425,8 @@ def _define_discord_view_classes() -> None:
             if msg:
                 try:
                     embed = discord.Embed(
-                        title="⚙ Model Configuration",
-                        description="⏱ Selection expired — no model change.",
+                        title="⚙ モデル設定",
+                        description="⏱ 選択期限が切れました。モデルは変更していません。",
                         color=discord.Color.greyple(),
                     )
                     await msg.edit(embed=embed, view=self)
@@ -6458,7 +6512,7 @@ def _define_discord_view_classes() -> None:
                 self.add_item(button)
 
             other_btn = discord.ui.Button(
-                label="✏️ Other (type answer)",
+                label="✏️ その他（直接入力）",
                 style=discord.ButtonStyle.secondary,
                 custom_id=f"clarify:{clarify_id}:other",
             )
@@ -6484,12 +6538,12 @@ def _define_discord_view_classes() -> None:
             """Resolve the clarify with a chosen option."""
             if self.resolved:
                 await interaction.response.send_message(
-                    "This prompt has already been answered~", ephemeral=True,
+                    "この確認はすでに回答済みです。", ephemeral=True,
                 )
                 return
             if not self._check_auth(interaction):
                 await interaction.response.send_message(
-                    "You're not authorized to answer this prompt~", ephemeral=True,
+                    "この確認に回答する権限がありません。", ephemeral=True,
                 )
                 return
 
@@ -6504,7 +6558,7 @@ def _define_discord_view_classes() -> None:
                 user = getattr(interaction, "user", None)
                 display_name = getattr(user, "display_name", "user")
                 embed.color = discord.Color.green()
-                embed.set_footer(text=f"Answered by {display_name}: {choice}")
+                embed.set_footer(text=f"回答者 {display_name}: {choice}")
 
             try:
                 await interaction.response.edit_message(embed=embed, view=self)
@@ -6552,12 +6606,12 @@ def _define_discord_view_classes() -> None:
             """Flip the clarify entry into text-capture mode."""
             if self.resolved:
                 await interaction.response.send_message(
-                    "This prompt has already been answered~", ephemeral=True,
+                    "この確認はすでに回答済みです。", ephemeral=True,
                 )
                 return
             if not self._check_auth(interaction):
                 await interaction.response.send_message(
-                    "You're not authorized to answer this prompt~", ephemeral=True,
+                    "この確認に回答する権限がありません。", ephemeral=True,
                 )
                 return
 
@@ -6585,7 +6639,7 @@ def _define_discord_view_classes() -> None:
                 display_name = getattr(user, "display_name", "user")
                 embed.color = discord.Color.blue()
                 embed.set_footer(
-                    text=f"Awaiting typed response from {display_name}…",
+                    text=f"手入力待ち: {display_name}",
                 )
 
             try:
@@ -6607,7 +6661,7 @@ def _define_discord_view_classes() -> None:
                     embed = msg.embeds[0] if msg.embeds else None
                     if embed:
                         embed.color = discord.Color.greyple()
-                        embed.set_footer(text="⏱ Prompt expired — no action taken")
+                        embed.set_footer(text="⏱ 期限切れです。操作は行われませんでした。")
                     await msg.edit(embed=embed, view=self)
                 except Exception:
                     pass
@@ -6645,7 +6699,7 @@ def _derive_forum_thread_name(message: str) -> str:
     # Strip common markdown heading prefixes
     first_line = first_line.lstrip("#").strip()
     if not first_line:
-        first_line = "New Post"
+        first_line = "新規投稿"
     return first_line[:100]
 
 
