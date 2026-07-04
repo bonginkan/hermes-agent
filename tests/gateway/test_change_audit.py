@@ -1,7 +1,11 @@
 import json
 from types import SimpleNamespace
 
-from gateway.change_audit import record_discord_audit_event, should_audit_discord_user
+from gateway.change_audit import (
+    record_discord_audit_event,
+    record_discord_intake_route,
+    should_audit_discord_user,
+)
 
 
 def test_should_audit_default_user_id(monkeypatch):
@@ -69,3 +73,40 @@ def test_record_discord_audit_event_ignores_other_users(tmp_path, monkeypatch):
     )
 
     assert not (tmp_path / "audit").exists()
+
+
+def test_record_discord_intake_route_writes_decision_without_raw_prompt(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_DISCORD_AUDIT_DIR", str(tmp_path / "audit"))
+    hermes_home = tmp_path / "hermes"
+    hermes_home.mkdir()
+    source = SimpleNamespace(
+        platform=SimpleNamespace(value="discord"),
+        user_id="473730953735438336",
+        chat_id="channel-1",
+        chat_type="thread",
+        thread_id="thread-1",
+        message_id="message-1",
+    )
+    event = SimpleNamespace(
+        source=source,
+        text="Gateway shutting down が再発しているので原因を特定して対策して",
+        message_id="message-1",
+    )
+
+    record_discord_intake_route(
+        hermes_home=hermes_home,
+        event=event,
+        message_preview="Gateway shutting down が再発",
+        route={
+            "lane": "incident",
+            "capabilities": ["intent_tone_detection", "research_methodology"],
+            "structured_surface": True,
+        },
+    )
+
+    audit_path = tmp_path / "audit" / "discord-user-473730953735438336.jsonl"
+    record = json.loads(audit_path.read_text(encoding="utf-8").strip())
+    assert record["kind"] == "discord_intake_route"
+    assert record["route"]["lane"] == "incident"
+    assert record["message"]["sha256"]
+    assert "原因を特定" not in json.dumps(record, ensure_ascii=False)

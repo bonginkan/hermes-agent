@@ -54,7 +54,7 @@ from typing import Dict, Optional, Any, List, Union
 from agent.account_usage import fetch_account_usage, render_account_usage_lines
 from agent.async_utils import safe_schedule_threadsafe
 from agent.i18n import t
-from gateway.change_audit import record_discord_audit_event
+from gateway.change_audit import record_discord_audit_event, record_discord_intake_route
 from hermes_cli.config import cfg_get
 from hermes_cli.fallback_config import get_fallback_chain
 
@@ -376,17 +376,82 @@ def _sanitize_gateway_final_response(platform: Any, text: str) -> str:
 
     Telegram is Bob's mobile inbox, so it should receive concise, safe provider
     failure categories instead of raw HTTP bodies, request IDs, or policy text.
-    Other platforms keep the existing behaviour for now.
+    Discord receives concise recovery notices for empty/no-response failures so
+    long threads do not look like the bot simply disappeared.
     """
     if not text:
         return text
-    if _gateway_platform_value(platform) != "telegram":
+    platform_value = _gateway_platform_value(platform)
+    if platform_value == "discord":
+        return _discord_gateway_recovery_reply(str(text))
+    if platform_value != "telegram":
         return text
 
     redacted = _redact_gateway_user_facing_secrets(str(text))
     if _looks_like_gateway_provider_error(redacted):
         return _gateway_provider_error_reply(redacted)
     return redacted
+
+
+def _discord_gateway_recovery_reply(text: str) -> str:
+    """Rewrite generic gateway no-response fallbacks for Discord."""
+    body = str(text or "").strip()
+    if not body:
+        return body
+    if body.startswith("⚠️ Processing completed but no response was generated."):
+        return (
+            "⚠️ 処理は走ったけど、Discordに出せる最終応答が生成されなかった。"
+            "もう一度送って。長スレなら、残すスレと次の指示だけ短く投げてくれたらそこから復旧する。"
+        )
+    if body.startswith("⚠️ Processing stopped:"):
+        return (
+            "⚠️ 処理が途中で止まって、最終応答まで届いてない。"
+            "もう一度送って。必要なら「続けて」より、やることを一文で再指定してくれると復旧しやすい。"
+        )
+    if body.startswith("⚠️ Session too large for the model's context window."):
+        return (
+            "⚠️ このスレが長くなりすぎて、文脈上限に当たってる。"
+            "残すスレ・やること・完了条件の3点だけ短く送って。そこから新しい文脈で続ける。"
+        )
+    if body.startswith("The request failed:"):
+        return (
+            "⚠️ 処理に失敗して、最終応答を出せなかった。"
+            "もう一度送って。長スレや重い作業なら、対象と次アクションだけ短く切ってくれると通しやすい。"
+        )
+    return text
+
+
+_DISCORD_INTERNAL_INTERIM_START_RE = re.compile(
+    r"^\s*(?:wait(?:\b| due\b)|need(?:\b| to\b)|we need\b|i need\b|maybe\b|do\b|run\b|update\b|check\b)",
+    re.IGNORECASE,
+)
+_DISCORD_INTERNAL_INTERIM_SIGNAL_RE = re.compile(
+    r"\b(?:next_run|cron|tick|deliver prompt|manual(?:ly)?|hermes|gateway|launchctl|pytest|gh|git|repo|branch|commit|push|worktree|receipt)\b",
+    re.IGNORECASE,
+)
+_CJK_TEXT_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff]")
+
+
+def _looks_like_internal_discord_interim_response(text: str) -> bool:
+    """Return True for terse model scratch notes that should not hit Discord."""
+    body = str(text or "").strip()
+    if not body:
+        return False
+    if len(body) > 280 or body.count("\n") > 2:
+        return False
+    if _CJK_TEXT_RE.search(body):
+        return False
+    if not _DISCORD_INTERNAL_INTERIM_START_RE.search(body):
+        return False
+    return bool(_DISCORD_INTERNAL_INTERIM_SIGNAL_RE.search(body))
+
+
+def _should_suppress_gateway_interim_assistant(platform: Any, text: str) -> bool:
+    """Protect Discord from raw/internal first-response leaks."""
+    return (
+        _gateway_platform_value(platform) == "discord"
+        and _looks_like_internal_discord_interim_response(text)
+    )
 
 
 def _prepare_gateway_status_message(platform: Any, event_type: str, message: str) -> Optional[str]:
@@ -2130,7 +2195,52 @@ _KABOSU_DISCORD_ADDRESS_RE = re.compile(
     r"((?:^|[\s　、。,.!?！？])(?:カボス|Kabosu|QaboS|Hermes)(?:$|[\s　、。,.!?！？]))",
     re.IGNORECASE,
 )
+_KABOSU_FABLE_INCIDENT_RE = re.compile(
+    r"("
+    r"Gateway shutting down|no[-_ ]?response|not found|context length|context window|"
+    r"session too large|truncat|コンテキスト|長スレ|落ち|止ま|詰ま|固ま|再発|原因|対策|復旧|"
+    r"二度と|空応答|応答がない|返ってこない|漏れ|raw|内部.*漏"
+    r")",
+    re.IGNORECASE,
+)
+_KABOSU_FABLE_CONSULT_RE = re.compile(
+    r"("
+    r"どう思う|改善|ベストプラクティス|違和感|評価|品質|設計|方針|判断|比較|"
+    r"どっち|なぜ|なんで|理由|背景|語感|見え方|方向|導入|最良|ベスト|レビュー"
+    r")",
+    re.IGNORECASE,
+)
+_KABOSU_FABLE_STATUS_RE = re.compile(
+    r"("
+    r"進捗|状態|状況|確認|チェック|どうなって|終わっ|完了|いけた|できた|"
+    r"正しく|想定どおり|ログ|見て|調べて"
+    r")",
+    re.IGNORECASE,
+)
+_KABOSU_FABLE_WORK_RE = re.compile(
+    r"("
+    r"実装|修正|対応|作成|追加|入れ|反映|issue化|PR|pull request|commit|push|"
+    r"GitHub|repo|DB|Firestore|cron|automation|pause|resume|デプロイ|close|クローズ"
+    r")",
+    re.IGNORECASE,
+)
+_KABOSU_FABLE_CASUAL_RE = re.compile(
+    r"^\s*(?:ok|OK|おけ|了解|ありがとう|助かる|いいね|最高|草|w+|なるほど|うん|はい|よし)[!！。.\s]*$",
+    re.IGNORECASE,
+)
 _DEFAULT_KABOSU_DISCORD_BOT_IDS = {"1517895542213181480"}
+
+
+@dataclasses.dataclass(frozen=True)
+class KabosuFableIntakeDecision:
+    lane: str
+    intent_mismatch_risk: bool
+    capabilities: tuple[str, ...]
+    methodology_skill: bool
+    structured_surface: bool
+    pre_send_review: bool
+    surface_format: str
+    reason_codes: tuple[str, ...]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -2149,6 +2259,7 @@ class KabosuDiscordMessageEnvelope:
     topic: str
     hard_veto: bool
     lightweight_runtime_eligible: bool
+    fable_intake: KabosuFableIntakeDecision
     reason: str
 
 
@@ -2350,6 +2461,130 @@ def _kabosu_response_visibility_context(
         "- Keep the Kabosu hype frame: high-energy gyaru opening, practical answer, high-energy gyaru closing.\n"
         "- Remove repeated meaning, obvious process narration, and generic closing lines."
     )
+
+
+def _kabosu_fable_intake_decision(
+    text: str,
+    envelope: Optional["KabosuDiscordMessageEnvelope"] = None,
+    *,
+    runtime_lightweight_eligible: Optional[bool] = None,
+) -> KabosuFableIntakeDecision:
+    """Split Fable-style help into routing, methodology, and surface controls."""
+    if envelope is not None:
+        body = envelope.semantic_body or envelope.current_body or text or ""
+    else:
+        body = text or ""
+    raw = str(body or "").strip()
+    compact = re.sub(r"\s+", " ", raw)
+    is_short = len(compact) <= 40 and "\n" not in raw
+    is_casual = bool(_KABOSU_FABLE_CASUAL_RE.search(compact))
+    is_incident = bool(_KABOSU_FABLE_INCIDENT_RE.search(raw))
+    is_consult = bool(_KABOSU_FABLE_CONSULT_RE.search(raw))
+    is_status = bool(_KABOSU_FABLE_STATUS_RE.search(raw))
+    is_work = bool(_KABOSU_FABLE_WORK_RE.search(raw))
+    runtime_lane = (
+        bool(runtime_lightweight_eligible)
+        if runtime_lightweight_eligible is not None
+        else bool(envelope and envelope.lightweight_runtime_eligible)
+    )
+
+    reason_codes: list[str] = []
+    if is_short:
+        reason_codes.append("short")
+    if is_casual:
+        reason_codes.append("casual")
+    if is_incident:
+        reason_codes.append("incident_keyword")
+    if is_consult:
+        reason_codes.append("consult_or_evaluation")
+    if is_status:
+        reason_codes.append("status_check")
+    if is_work:
+        reason_codes.append("work_request")
+    if runtime_lane:
+        reason_codes.append("runtime_lightweight_candidate")
+
+    intent_mismatch_risk = bool(
+        is_incident
+        or is_consult
+        or (
+            is_short
+            and not is_casual
+            and not is_work
+            and not is_status
+            and bool(re.search(r"(これ|それ|どっち|なんで|なぜ|どう|やば|おかし|違う)", raw))
+        )
+    )
+
+    if is_casual and not intent_mismatch_risk:
+        lane = "light"
+    elif is_incident:
+        lane = "incident"
+    elif is_consult or intent_mismatch_risk:
+        lane = "ambiguous_consult"
+    elif runtime_lane:
+        lane = "runtime_lightweight"
+    elif is_status and not is_work:
+        lane = "status"
+    elif is_work:
+        lane = "work"
+    elif is_short:
+        lane = "light"
+    else:
+        lane = "standard"
+
+    methodology_skill = lane in {"incident", "ambiguous_consult"}
+    structured_surface = lane in {"incident", "ambiguous_consult"}
+    pre_send_review = lane in {"incident", "ambiguous_consult"}
+    surface_format = "structured_answer" if structured_surface else "persona_owned"
+
+    capabilities = ["intent_tone_detection"]
+    if methodology_skill:
+        capabilities.append("research_methodology")
+    if structured_surface:
+        capabilities.append("fact_hypothesis_surface")
+
+    return KabosuFableIntakeDecision(
+        lane=lane,
+        intent_mismatch_risk=intent_mismatch_risk,
+        capabilities=tuple(capabilities),
+        methodology_skill=methodology_skill,
+        structured_surface=structured_surface,
+        pre_send_review=pre_send_review,
+        surface_format=surface_format,
+        reason_codes=tuple(reason_codes or ["default"]),
+    )
+
+
+def _kabosu_fable_intake_context(decision: KabosuFableIntakeDecision) -> str:
+    """Render the per-turn internal contract for the normal agent path."""
+    lines = [
+        "Kabosu intake route (internal only; never mention this route, Fable, lane names, skills, or evaluation conditions to Discord users):",
+        f"- lane: {decision.lane}",
+        f"- intent_tone_detection: {'on' if 'intent_tone_detection' in decision.capabilities else 'off'}; before answering, cheaply check whether a literal reply would miss the user's real concern or pressure/escape hatch/authority transfer.",
+        f"- research_methodology: {'on' if decision.methodology_skill else 'off'}; use deeper read-only evidence ordering only for incident/ambiguous consultation lanes, not casual/status by default.",
+        f"- structured_surface: {'on' if decision.structured_surface else 'off'}; only use explicit fact/hypothesis/action sections when this is on.",
+        "- final Discord wording stays Kabosu persona-owned: keep the live tone light when the lane is light/status/work, even if internal reasoning was deeper.",
+        "- If research_methodology is off, do not expand the task just to be thorough; answer at the user's requested granularity.",
+    ]
+    if decision.pre_send_review:
+        lines.append(
+            "- pre_send_review: before finalizing, check for overclaiming, literal-but-wrong framing, and internal routing leakage."
+        )
+    return "\n".join(lines)
+
+
+def _kabosu_fable_intake_route_dict(decision: KabosuFableIntakeDecision) -> dict[str, Any]:
+    return {
+        "lane": decision.lane,
+        "intent_mismatch_risk": decision.intent_mismatch_risk,
+        "capabilities": list(decision.capabilities),
+        "methodology_skill": decision.methodology_skill,
+        "structured_surface": decision.structured_surface,
+        "pre_send_review": decision.pre_send_review,
+        "surface_format": decision.surface_format,
+        "reason_codes": list(decision.reason_codes),
+    }
 
 
 def _looks_like_discord_runtime_settings_request(text: str) -> bool:
@@ -2622,6 +2857,12 @@ def _kabosu_discord_message_envelope(
         lightweight_runtime_eligible = True
         reason = "user_runtime_or_owner_request"
 
+    fable_intake = _kabosu_fable_intake_decision(
+        semantic_body or current_body,
+        None,
+        runtime_lightweight_eligible=lightweight_runtime_eligible,
+    )
+
     return KabosuDiscordMessageEnvelope(
         raw_text=raw,
         current_body=current_body,
@@ -2637,6 +2878,7 @@ def _kabosu_discord_message_envelope(
         topic=topic,
         hard_veto=hard_veto,
         lightweight_runtime_eligible=lightweight_runtime_eligible,
+        fable_intake=fable_intake,
         reason=reason,
     )
 
@@ -11018,6 +11260,39 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         except Exception as _ts_err:
             logger.debug("Message timestamp injection failed (non-fatal): %s", _ts_err)
 
+        if source.platform == Platform.DISCORD:
+            try:
+                _route_cfg = _load_gateway_config()
+                _route_envelope = _kabosu_discord_message_envelope(
+                    source,
+                    event.text or "",
+                    _route_cfg,
+                )
+                _fable_intake = (
+                    _route_envelope.fable_intake
+                    if _route_envelope is not None
+                    else _kabosu_fable_intake_decision(message_text)
+                )
+                _fable_intake_context = _kabosu_fable_intake_context(_fable_intake)
+                if _fable_intake_context:
+                    if persist_user_message is None and isinstance(message_text, str):
+                        persist_user_message = message_text
+                    message_text = (
+                        "[Internal intake route for this turn only. Do not quote or mention this block.]\n"
+                        f"{_fable_intake_context}\n"
+                        "[/Internal intake route]\n\n"
+                        "[User message]\n"
+                        f"{message_text}"
+                    )
+                record_discord_intake_route(
+                    hermes_home=_hermes_home,
+                    event=event,
+                    message_preview=_msg_preview,
+                    route=_kabosu_fable_intake_route_dict(_fable_intake),
+                )
+            except Exception:
+                logger.debug("Kabosu Fable intake routing failed", exc_info=True)
+
         # Bind this gateway run generation to the adapter's active-session
         # event so deferred post-delivery callbacks can be released by the
         # same run that registered them.
@@ -16971,6 +17246,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
             def _interim_assistant_cb(text: str, *, already_streamed: bool = False) -> None:
                 if not _run_still_current():
+                    return
+                if (
+                    not already_streamed
+                    and _should_suppress_gateway_interim_assistant(source.platform, text)
+                ):
+                    logger.info(
+                        "Suppressed internal-looking Discord interim assistant text for session %s",
+                        session_key or "?",
+                    )
                     return
                 if _stream_consumer is not None:
                     if already_streamed:

@@ -117,3 +117,44 @@ def record_discord_audit_event(
 
     with audit_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def record_discord_intake_route(
+    *,
+    hermes_home: Path,
+    event: Any,
+    message_preview: str,
+    route: dict[str, Any],
+) -> None:
+    """Record Kabosu's internal intake-route decision for later replay/judging."""
+    source = getattr(event, "source", None)
+    if not source or not should_audit_discord_user(getattr(source, "user_id", None)):
+        return
+
+    audit_dir = Path(os.environ.get("HERMES_DISCORD_AUDIT_DIR") or hermes_home / "audit")
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    user_id = str(getattr(source, "user_id", "") or "unknown")
+    audit_path = audit_dir / f"discord-user-{user_id}.jsonl"
+    raw_text = str(getattr(event, "text", "") or "")
+
+    record = {
+        "schema_version": 1,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "kind": "discord_intake_route",
+        "source": {
+            "platform": getattr(getattr(source, "platform", None), "value", str(getattr(source, "platform", ""))),
+            "user_id": user_id,
+            "chat_id": getattr(source, "chat_id", None),
+            "chat_type": getattr(source, "chat_type", None),
+            "thread_id": getattr(source, "thread_id", None),
+            "message_id": getattr(source, "message_id", None) or getattr(event, "message_id", None),
+        },
+        "message": {
+            "sha256": hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
+            "preview": message_preview[:MAX_TEXT_CHARS],
+        },
+        "route": route,
+    }
+
+    with audit_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")

@@ -18,6 +18,8 @@ from gateway.run import (
     _looks_like_kabosu_discord_owner_question,
     _is_kabosu_discord_simple_response_source,
     _kabosu_discord_current_body,
+    _kabosu_fable_intake_context,
+    _kabosu_fable_intake_decision,
     _kabosu_discord_message_envelope,
     _kabosu_discord_lightweight_runtime_reply,
     _kabosu_response_visibility_context,
@@ -92,6 +94,67 @@ def test_kabosu_visibility_is_discord_only():
         _source("999999999999999999", platform=Platform.TELEGRAM),
         {},
     ) == ""
+
+
+def test_kabosu_fable_intake_keeps_casual_short_replies_light():
+    decision = _kabosu_fable_intake_decision("ありがとう！")
+
+    assert decision.lane == "light"
+    assert decision.capabilities == ("intent_tone_detection",)
+    assert not decision.methodology_skill
+    assert not decision.structured_surface
+    assert decision.surface_format == "persona_owned"
+
+    context = _kabosu_fable_intake_context(decision)
+    assert "research_methodology: off" in context
+    assert "structured_surface: off" in context
+    assert "final Discord wording stays Kabosu persona-owned" in context
+
+
+def test_kabosu_fable_intake_status_check_does_not_enable_surface_template():
+    decision = _kabosu_fable_intake_decision("今どうなってる？進捗確認して")
+
+    assert decision.lane == "status"
+    assert not decision.methodology_skill
+    assert not decision.structured_surface
+    assert "status_check" in decision.reason_codes
+
+
+def test_kabosu_fable_intake_incidents_enable_methodology_and_review():
+    decision = _kabosu_fable_intake_decision(
+        "Gateway shutting down が再発しているので原因を特定して対策して。二度と落とさないように"
+    )
+
+    assert decision.lane == "incident"
+    assert decision.intent_mismatch_risk
+    assert decision.methodology_skill
+    assert decision.structured_surface
+    assert decision.pre_send_review
+    assert decision.capabilities == (
+        "intent_tone_detection",
+        "research_methodology",
+        "fact_hypothesis_surface",
+    )
+
+    context = _kabosu_fable_intake_context(decision)
+    assert "research_methodology: on" in context
+    assert "structured_surface: on" in context
+    assert "pre_send_review" in context
+    assert "never mention this route" in context
+
+
+def test_kabosu_fable_intake_work_requests_do_not_expand_by_default():
+    decision = _kabosu_fable_intake_decision("これを実装！！")
+
+    assert decision.lane == "work"
+    assert not decision.methodology_skill
+    assert not decision.structured_surface
+    assert decision.capabilities == ("intent_tone_detection",)
+
+    automation = _kabosu_fable_intake_decision("automationをpauseして")
+    assert automation.lane == "work"
+    assert not automation.methodology_skill
+    assert not automation.structured_surface
 
 
 def test_kabosu_full_mode_allowlist_can_come_from_config():
